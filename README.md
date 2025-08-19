@@ -12,21 +12,17 @@
 ## Использование
 
 ### 1. Установка мониторинга на новом сервере
-wget https://raw.githubusercontent.com/YOURUSERNAME/server-monitoring-scripts/main/install_monitoring.sh
-chmod +x install_monitoring.sh
-./install_monitoring.sh
+curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/install_monitoring.sh | bash
+### Интерактивный режим:
+wget https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/install_monitoring.sh && chmod +x install_monitoring.sh && ./install_monitoring.sh
 
 ### 2. Добавление сервера в центральный мониторинг
 
 На сервере с Prometheus выполните:
-wget https://raw.githubusercontent.com/YOURUSERNAME/server-monitoring-scripts/main/add_server_to_monitoring.sh
-chmod +x add_server_to_monitoring.sh
-./add_server_to_monitoring.sh SERVER_NAME TAILSCALE_IP [ANGIE_PORT]
+curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s "SERVER_NAME" "IP"
 
 ### 3. Удаление сервера из мониторинга
-wget https://raw.githubusercontent.com/YOURUSERNAME/server-monitoring-scripts/main/remove_server_from_monitoring.sh
-chmod +x remove_server_from_monitoring.sh
-./remove_server_from_monitoring.sh SERVER_NAME
+curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/remove | bash -s "SERVER_NAME"
 ## Требования
 
 - Linux с systemd
