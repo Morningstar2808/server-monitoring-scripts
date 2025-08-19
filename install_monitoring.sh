@@ -2,7 +2,7 @@
 
 # =============================================================================
 # Скрипт быстрой установки Node Exporter с автообнаружением Angie
-# Выполняется под root (без sudo) - ИСПРАВЛЕННАЯ ВЕРСИЯ
+# Выполняется под root (без sudo) - ИСПРАВЛЕННАЯ ВЕРСИЯ БЕЗ ДУБЛИРОВАНИЯ
 # =============================================================================
 
 set -e
@@ -156,14 +156,15 @@ else
     exit 1
 fi
 
-# Проверяем доступность метрик
+# Проверяем доступность метрик (исправленная проверка)
 echo "Проверка доступности метрик..."
 for i in {1..5}; do
-    if curl -s --connect-timeout 5 http://localhost:9100/metrics | grep -q "node_cpu_seconds_total"; then
-        echo "✓ Метрики Node Exporter доступны"
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9100/metrics 2>/dev/null)
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "✓ Метрики Node Exporter доступны (HTTP $HTTP_CODE)"
         break
     else
-        echo "Попытка $i/5: метрики пока недоступны, ждем..."
+        echo "Попытка $i/5: метрики недоступны (HTTP $HTTP_CODE), ждем..."
         sleep 3
     fi
     
@@ -185,7 +186,8 @@ if pgrep -x "angie" > /dev/null; then
     
     # Проверяем, настроены ли метрики Prometheus в Angie
     for port in 8080 80 443; do
-        if curl -s --connect-timeout 5 "http://localhost:$port/prometheus" 2>/dev/null | grep -q "angie_"; then
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$port/prometheus" 2>/dev/null)
+        if [ "$HTTP_CODE" = "200" ]; then
             ANGIE_METRICS_PORT=$port
             echo "✓ Метрики Angie доступны на порту $port"
             break
@@ -216,29 +218,7 @@ INSTALL_DATE="$(date -Iseconds)"
 NODE_EXPORTER_VERSION="$NODE_EXPORTER_VER"
 INFO_EOF
 
-echo ""
-echo "=================================================="
-echo "🎉 УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!"
-echo "=================================================="
-echo "Сервер: $SERVER_NAME"
-echo "IP адрес: $TAILSCALE_IP"
-echo "Архитектура: $ARCH ($ARCH_SUFFIX)"
-echo "Node Exporter: http://$TAILSCALE_IP:9100/metrics"
-if [ "$ANGIE_DETECTED" = true ] && [ -n "$ANGIE_METRICS_PORT" ]; then
-    echo "Angie метрики: http://$TAILSCALE_IP:$ANGIE_METRICS_PORT/prometheus"
-fi
-echo ""
-echo "📋 ДЛЯ ДОБАВЛЕНИЯ В ЦЕНТРАЛЬНЫЙ МОНИТОРИНГ:"
-echo "На сервере Prometheus выполните:"
-echo ""
-if [ -n "$ANGIE_METRICS_PORT" ]; then
-    echo "  ./add_server_to_monitoring.sh \"$SERVER_NAME\" \"$TAILSCALE_IP\" \"$ANGIE_METRICS_PORT\""
-else
-    echo "  ./add_server_to_monitoring.sh \"$SERVER_NAME\" \"$TAILSCALE_IP\""
-fi
-echo ""
-echo "✅ Готово! Сервер готов к мониторингу."
-
+# ЕДИНСТВЕННОЕ ФИНАЛЬНОЕ СООБЩЕНИЕ (без дублирования)
 echo ""
 echo "=================================================="
 echo "🎉 УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!"
