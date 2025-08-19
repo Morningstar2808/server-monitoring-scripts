@@ -238,3 +238,26 @@ else
 fi
 echo ""
 echo "✅ Готово! Сервер готов к мониторингу."
+
+echo ""
+echo "=================================================="
+echo "🎉 УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!"
+echo "=================================================="
+echo "Сервер: $SERVER_NAME"
+echo "IP адрес: $TAILSCALE_IP"
+echo "Архитектура: $ARCH ($ARCH_SUFFIX)"
+echo "Node Exporter: http://$TAILSCALE_IP:9100/metrics"
+if [ "$ANGIE_DETECTED" = true ] && [ -n "$ANGIE_METRICS_PORT" ]; then
+    echo "Angie метрики: http://$TAILSCALE_IP:$ANGIE_METRICS_PORT/prometheus"
+fi
+echo ""
+echo "📋 ДЛЯ ДОБАВЛЕНИЯ В ЦЕНТРАЛЬНЫЙ МОНИТОРИНГ:"
+echo "На сервере Prometheus выполните:"
+echo ""
+if [ -n "$ANGIE_METRICS_PORT" ]; then
+    echo "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"$SERVER_NAME\" \"$TAILSCALE_IP\" \"$ANGIE_METRICS_PORT\""
+else
+    echo "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"$SERVER_NAME\" \"$TAILSCALE_IP\""
+fi
+echo ""
+echo "✅ Готово! Сервер готов к мониторингу."

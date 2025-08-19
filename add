@@ -1,5 +1,6 @@
 #!/bin/bash
 # Обертка для добавления сервера в мониторинг одной командой
+# С проверкой актуальности скрипта
 
 if [ $# -lt 2 ]; then
     echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP [ANGIE_PORT]"
@@ -19,18 +20,43 @@ if [ -n "$ANGIE_PORT" ]; then
 fi
 echo ""
 
-# Скачиваем основной скрипт
-wget -q https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add_server_to_monitoring.sh
-chmod +x add_server_to_monitoring.sh
+SCRIPT_NAME="add_server_to_monitoring.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/$SCRIPT_NAME"
+NEED_DOWNLOAD=true
+
+# Проверяем, есть ли уже скрипт и актуальный ли он
+if [ -f "$SCRIPT_NAME" ]; then
+    echo "📄 Найден локальный скрипт $SCRIPT_NAME"
+    
+    # Проверяем возраст файла (если старше 1 дня - обновляем)
+    if [ $(find "$SCRIPT_NAME" -mtime -1 2>/dev/null | wc -l) -gt 0 ]; then
+        echo "✅ Скрипт актуальный (обновлен менее суток назад)"
+        NEED_DOWNLOAD=false
+    else
+        echo "⚠️  Скрипт устарел, обновляем..."
+    fi
+fi
+
+# Скачиваем скрипт если нужно
+if [ "$NEED_DOWNLOAD" = true ]; then
+    echo "⬇️  Скачиваем актуальный скрипт..."
+    if ! wget -q "$SCRIPT_URL"; then
+        echo "❌ Ошибка скачивания скрипта"
+        exit 1
+    fi
+    chmod +x "$SCRIPT_NAME"
+    echo "✅ Скрипт обновлен"
+fi
+
+echo ""
+echo "🚀 Запускаем добавление сервера..."
 
 # Запускаем с параметрами
 if [ -n "$ANGIE_PORT" ]; then
-    ./add_server_to_monitoring.sh "$SERVER_NAME" "$TAILSCALE_IP" "$ANGIE_PORT"
+    ./"$SCRIPT_NAME" "$SERVER_NAME" "$TAILSCALE_IP" "$ANGIE_PORT"
 else
-    ./add_server_to_monitoring.sh "$SERVER_NAME" "$TAILSCALE_IP"
+    ./"$SCRIPT_NAME" "$SERVER_NAME" "$TAILSCALE_IP"
 fi
 
-# Очищаем
-rm -f add_server_to_monitoring.sh
-
+echo ""
 echo "✅ Готово!"
