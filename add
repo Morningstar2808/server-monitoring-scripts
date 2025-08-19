@@ -1,0 +1,36 @@
+#!/bin/bash
+# Обертка для добавления сервера в мониторинг одной командой
+
+if [ $# -lt 2 ]; then
+    echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP [ANGIE_PORT]"
+    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"web-server-01\" \"100.87.187.88\" \"8080\""
+    exit 1
+fi
+
+SERVER_NAME="$1"
+TAILSCALE_IP="$2"
+ANGIE_PORT="${3:-}"
+
+echo "=== Добавление сервера в мониторинг ==="
+echo "Сервер: $SERVER_NAME"
+echo "IP: $TAILSCALE_IP"
+if [ -n "$ANGIE_PORT" ]; then
+    echo "Angie порт: $ANGIE_PORT"
+fi
+echo ""
+
+# Скачиваем основной скрипт
+wget -q https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add_server_to_monitoring.sh
+chmod +x add_server_to_monitoring.sh
+
+# Запускаем с параметрами
+if [ -n "$ANGIE_PORT" ]; then
+    ./add_server_to_monitoring.sh "$SERVER_NAME" "$TAILSCALE_IP" "$ANGIE_PORT"
+else
+    ./add_server_to_monitoring.sh "$SERVER_NAME" "$TAILSCALE_IP"
+fi
+
+# Очищаем
+rm -f add_server_to_monitoring.sh
+
+echo "✅ Готово!"

@@ -1,0 +1,26 @@
+#!/bin/bash
+# Обертка для удаления сервера из мониторинга одной командой
+
+if [ $# -ne 1 ]; then
+    echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/remove | bash -s SERVER_NAME"
+    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/remove | bash -s \"web-server-01\""
+    exit 1
+fi
+
+SERVER_NAME="$1"
+
+echo "=== Удаление сервера из мониторинга ==="
+echo "Сервер: $SERVER_NAME"
+echo ""
+
+# Скачиваем основной скрипт
+wget -q https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/remove_server_from_monitoring.sh
+chmod +x remove_server_from_monitoring.sh
+
+# Запускаем с параметром
+./remove_server_from_monitoring.sh "$SERVER_NAME"
+
+# Очищаем
+rm -f remove_server_from_monitoring.sh
+
+echo "✅ Готово!"
