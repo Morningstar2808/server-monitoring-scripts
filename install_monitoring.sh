@@ -58,7 +58,7 @@ fi
 NODE_EXPORTER_INSTALLED=false
 NODE_EXPORTER_VER="1.9.1"
 
-# ПРАВИЛЬНАЯ проверка - сначала systemctl, потом curl
+printf "=== Проверка Node Exporter ===\n"
 if systemctl is-active --quiet node_exporter 2>/dev/null; then
     printf "✓ Найден запущенный Node Exporter, проверяем метрики...\n"
     if timeout 5 curl -s http://localhost:9100/metrics 2>/dev/null | grep -q "node_cpu_seconds_total"; then
@@ -140,7 +140,7 @@ done
 CADVISOR_INSTALLED=false
 CADVISOR_PORT="8080"
 
-printf "=== Установка cAdvisor ===\n"
+printf "=== Проверка и установка cAdvisor ===\n"
 
 if systemctl is-active --quiet cadvisor 2>/dev/null; then
     printf "✓ Найден запущенный cAdvisor, проверяем метрики...\n"
@@ -231,6 +231,7 @@ fi
 ANGIE_DETECTED=false
 ANGIE_METRICS_PORT=""
 
+printf "=== Проверка Angie ===\n"
 if pgrep -x "angie" > /dev/null; then
     printf "✓ Angie обнаружен\n"
     ANGIE_DETECTED=true
