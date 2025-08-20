@@ -34,8 +34,11 @@ if [ -t 0 ]; then
     while true; do
         printf "Введите уникальное имя сервера (латиницей, без пробелов): "
         read -r SERVER_NAME
-        if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]]; then break; else
-            printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания\n"; fi
+        if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]]; then 
+            break
+        else
+            printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания\n"
+        fi
     done
 else
     if [ -f /etc/hostname ]; then
@@ -49,16 +52,29 @@ else
     printf "Автоматически определено имя сервера: %s\n" "$SERVER_NAME"
 fi
 
-# NODE EXPORTER
+# =============================================================================
+# NODE EXPORTER - ИСПРАВЛЕННАЯ ПРОВЕРКА
+# =============================================================================
 NODE_EXPORTER_INSTALLED=false
 NODE_EXPORTER_VER="1.9.1"
 
-if systemctl is-active --quiet node_exporter 2>/dev/null && curl -s http://localhost:9100/metrics | grep -q "node_cpu_seconds_total"; then
-    printf "✓ Node Exporter уже установлен и работает\n"
-    NODE_EXPORTER_INSTALLED=true
+# ПРАВИЛЬНАЯ проверка - сначала systemctl, потом curl
+if systemctl is-active --quiet node_exporter 2>/dev/null; then
+    printf "✓ Найден запущенный Node Exporter, проверяем метрики...\n"
+    if timeout 5 curl -s http://localhost:9100/metrics 2>/dev/null | grep -q "node_cpu_seconds_total"; then
+        printf "✓ Node Exporter уже установлен и работает корректно\n"
+        NODE_EXPORTER_INSTALLED=true
+    else
+        printf "⚠ Node Exporter запущен, но метрики недоступны, переустанавливаем...\n"
+        systemctl stop node_exporter
+    fi
 else
     printf "Node Exporter не найден, устанавливаем...\n"
+fi
+
+if [ "$NODE_EXPORTER_INSTALLED" = false ]; then
     systemctl stop node_exporter 2>/dev/null || true
+    systemctl disable node_exporter 2>/dev/null || true
     
     DOWNLOAD_URL="https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VER}/node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}.tar.gz"
     printf "Загружаем Node Exporter %s...\n" "$NODE_EXPORTER_VER"
@@ -95,33 +111,53 @@ EOF
         printf "✓ Node Exporter успешно запущен\n"
         NODE_EXPORTER_INSTALLED=true
     else
-        printf "✗ Ошибка запуска Node Exporter\n"; exit 1
+        printf "✗ Ошибка запуска Node Exporter\n"
+        systemctl status node_exporter --no-pager
+        exit 1
     fi
     rm -rf /tmp/node_exporter-*
 fi
 
-# Проверка Node Exporter
-printf "Проверка метрик Node Exporter...\n"
+# Финальная проверка Node Exporter
+printf "Финальная проверка метрик Node Exporter...\n"
 for i in {1..3}; do
-    if curl -s http://localhost:9100/metrics | grep -q "node_cpu_seconds_total"; then
-        printf "✓ Метрики Node Exporter доступны\n"; break
+    if timeout 5 curl -s http://localhost:9100/metrics 2>/dev/null | grep -q "node_cpu_seconds_total"; then
+        printf "✓ Метрики Node Exporter доступны\n"
+        break
     else
-        printf "Попытка %d/3...\n" "$i"; sleep 2
+        printf "Попытка %d/3...\n" "$i"
+        sleep 2
     fi
-    if [ $i -eq 3 ]; then printf "✗ Node Exporter недоступен\n"; exit 1; fi
+    if [ $i -eq 3 ]; then 
+        printf "✗ Node Exporter недоступен\n"
+        exit 1
+    fi
 done
 
-# CADVISOR (ИСПРАВЛЕННАЯ ВЕРСИЯ ДЛЯ ARM64)
+# =============================================================================
+# CADVISOR - ОБЯЗАТЕЛЬНАЯ УСТАНОВКА
+# =============================================================================
 CADVISOR_INSTALLED=false
 CADVISOR_PORT="8080"
 
-if systemctl is-active --quiet cadvisor 2>/dev/null && curl -s http://localhost:8080/metrics | grep -q "container_cpu_usage_seconds_total"; then
-    printf "✓ cAdvisor уже работает\n"
-    CADVISOR_INSTALLED=true
+printf "=== Установка cAdvisor ===\n"
+
+if systemctl is-active --quiet cadvisor 2>/dev/null; then
+    printf "✓ Найден запущенный cAdvisor, проверяем метрики...\n"
+    if timeout 5 curl -s http://localhost:8080/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
+        printf "✓ cAdvisor уже установлен и работает корректно\n"
+        CADVISOR_INSTALLED=true
+    else
+        printf "⚠ cAdvisor запущен, но метрики недоступны, переустанавливаем...\n"
+        systemctl stop cadvisor
+    fi
 else
-    printf "Устанавливаем cAdvisor на хост...\n"
-    
+    printf "cAdvisor не найден, устанавливаем на хост...\n"
+fi
+
+if [ "$CADVISOR_INSTALLED" = false ]; then
     systemctl stop cadvisor 2>/dev/null || true
+    systemctl disable cadvisor 2>/dev/null || true
     docker stop cadvisor 2>/dev/null || true
     docker rm cadvisor 2>/dev/null || true
     
@@ -140,7 +176,7 @@ else
         mv "cadvisor-${CADVISOR_VERSION}-linux-${CADVISOR_ARCH}" /usr/local/bin/cadvisor
         chmod +x /usr/local/bin/cadvisor
         
-        printf "Создаем сервис cAdvisor (минимальная конфигурация для ARM64)...\n"
+        printf "Создаем сервис cAdvisor (минимальная конфигурация)...\n"
         cat > /etc/systemd/system/cadvisor.service << 'EOF'
 [Unit]
 Description=cAdvisor
@@ -176,16 +212,22 @@ fi
 if [ "$CADVISOR_INSTALLED" = true ]; then
     printf "Проверка метрик cAdvisor...\n"
     for i in {1..5}; do
-        if curl -s http://localhost:8080/metrics | grep -q "container_cpu_usage_seconds_total"; then
-            printf "✓ cAdvisor метрики доступны на 8080\n"; break
+        if timeout 5 curl -s http://localhost:8080/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
+            printf "✓ cAdvisor метрики доступны на 8080\n"
+            break
         else
-            printf "Попытка %d/5...\n" "$i"; sleep 2
+            printf "Попытка %d/5...\n" "$i"
+            sleep 2
         fi
-        if [ $i -eq 5 ]; then printf "⚠ cAdvisor метрики недоступны\n"; fi
+        if [ $i -eq 5 ]; then 
+            printf "⚠ cAdvisor метрики недоступны\n"
+        fi
     done
 fi
 
+# =============================================================================
 # ANGIE
+# =============================================================================
 ANGIE_DETECTED=false
 ANGIE_METRICS_PORT=""
 
@@ -195,10 +237,11 @@ if pgrep -x "angie" > /dev/null; then
     
     printf "Проверка метрик Angie...\n"
     for port in 8081 80 443; do
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$port/prometheus" 2>/dev/null || echo "000")
+        HTTP_CODE=$(timeout 5 curl -s -o /dev/null -w "%{http_code}" "http://localhost:$port/prometheus" 2>/dev/null || echo "000")
         if [[ "$HTTP_CODE" =~ ^(200|204)$ ]]; then
             ANGIE_METRICS_PORT=$port
-            printf "✓ Метрики Angie на порту %s\n" "$port"; break
+            printf "✓ Метрики Angie на порту %s\n" "$port"
+            break
         fi
     done
     
@@ -209,7 +252,9 @@ else
     printf "ℹ Angie не обнаружен\n"
 fi
 
-# СОХРАНЕНИЕ
+# =============================================================================
+# СОХРАНЕНИЕ И ФИНАЛЬНЫЙ ВЫВОД
+# =============================================================================
 cat > /etc/monitoring-info.conf << EOF
 SERVER_NAME="$SERVER_NAME"
 TAILSCALE_IP="$TAILSCALE_IP"
@@ -224,7 +269,6 @@ NODE_EXPORTER_VERSION="$NODE_EXPORTER_VER"
 CADVISOR_VERSION="$CADVISOR_VERSION"
 EOF
 
-# ФИНАЛЬНЫЙ ВЫВОД
 printf "\n==================================================\n"
 printf "🎉 УСТАНОВКА ЗАВЕРШЕНА!\n"
 printf "==================================================\n"
@@ -242,9 +286,15 @@ if [ "$ANGIE_DETECTED" = true ] && [ -n "$ANGIE_METRICS_PORT" ]; then
 fi
 
 printf "\n📋 ДОБАВЛЕНИЕ В МОНИТОРИНГ:\n"
+printf "На сервере Prometheus выполните:\n\n"
+
 COMMAND_ARGS="\"$SERVER_NAME\" \"$TAILSCALE_IP\""
-if [ -n "$ANGIE_METRICS_PORT" ]; then COMMAND_ARGS="$COMMAND_ARGS \"$ANGIE_METRICS_PORT\""; fi
-if [ "$CADVISOR_INSTALLED" = true ]; then COMMAND_ARGS="$COMMAND_ARGS \"8080\""; fi
+if [ -n "$ANGIE_METRICS_PORT" ]; then 
+    COMMAND_ARGS="$COMMAND_ARGS \"$ANGIE_METRICS_PORT\""
+fi
+if [ "$CADVISOR_INSTALLED" = true ]; then 
+    COMMAND_ARGS="$COMMAND_ARGS \"8080\""
+fi
 
 printf "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s %s\n" "$COMMAND_ARGS"
-printf "\n✅ Готово!\n"
+printf "\n✅ Готово! Node Exporter + cAdvisor установлены как нативные сервисы\n"
