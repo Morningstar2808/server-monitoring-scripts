@@ -7,7 +7,6 @@
 set -e
 printf "=== Установка мониторинга сервера ===\n"
 
-# Архитектура
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64) ARCH_SUFFIX="amd64";;
@@ -18,7 +17,6 @@ case "$ARCH" in
 esac
 printf "Архитектура: %s -> %s\n" "$ARCH" "$ARCH_SUFFIX"
 
-# Tailscale IP
 TAILSCALE_IP=""
 if command -v tailscale > /dev/null 2>&1; then
     TAILSCALE_IP=$(tailscale ip -4 2>/dev/null | head -n1 || echo "")
@@ -28,7 +26,6 @@ if [ -z "$TAILSCALE_IP" ]; then
 fi
 printf "Определен IP: %s\n" "$TAILSCALE_IP"
 
-# Имя сервера
 SERVER_NAME=""
 if [ -t 0 ]; then
     while true; do
@@ -52,9 +49,7 @@ else
     printf "Автоматически определено имя сервера: %s\n" "$SERVER_NAME"
 fi
 
-# =============================================================================
-# NODE EXPORTER - ИСПРАВЛЕННАЯ ПРОВЕРКА
-# =============================================================================
+# NODE EXPORTER
 NODE_EXPORTER_INSTALLED=false
 NODE_EXPORTER_VER="1.9.1"
 
@@ -118,7 +113,6 @@ EOF
     rm -rf /tmp/node_exporter-*
 fi
 
-# Финальная проверка Node Exporter
 printf "Финальная проверка метрик Node Exporter...\n"
 for i in {1..3}; do
     if timeout 5 curl -s http://localhost:9100/metrics 2>/dev/null | grep -q "node_cpu_seconds_total"; then
@@ -134,9 +128,7 @@ for i in {1..3}; do
     fi
 done
 
-# =============================================================================
-# CADVISOR - ОБЯЗАТЕЛЬНАЯ УСТАНОВКА
-# =============================================================================
+# CADVISOR
 CADVISOR_INSTALLED=false
 CADVISOR_PORT="8080"
 
@@ -208,7 +200,6 @@ EOF
     fi
 fi
 
-# Проверка cAdvisor
 if [ "$CADVISOR_INSTALLED" = true ]; then
     printf "Проверка метрик cAdvisor...\n"
     for i in {1..5}; do
@@ -225,9 +216,7 @@ if [ "$CADVISOR_INSTALLED" = true ]; then
     done
 fi
 
-# =============================================================================
 # ANGIE
-# =============================================================================
 ANGIE_DETECTED=false
 ANGIE_METRICS_PORT=""
 
@@ -253,9 +242,7 @@ else
     printf "ℹ Angie не обнаружен\n"
 fi
 
-# =============================================================================
-# СОХРАНЕНИЕ И ФИНАЛЬНЫЙ ВЫВОД
-# =============================================================================
+# СОХРАНЕНИЕ
 cat > /etc/monitoring-info.conf << EOF
 SERVER_NAME="$SERVER_NAME"
 TAILSCALE_IP="$TAILSCALE_IP"
@@ -270,6 +257,7 @@ NODE_EXPORTER_VERSION="$NODE_EXPORTER_VER"
 CADVISOR_VERSION="$CADVISOR_VERSION"
 EOF
 
+# ФИНАЛЬНЫЙ ВЫВОД
 printf "\n==================================================\n"
 printf "🎉 УСТАНОВКА ЗАВЕРШЕНА!\n"
 printf "==================================================\n"
