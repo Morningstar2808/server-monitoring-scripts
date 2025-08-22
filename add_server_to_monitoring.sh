@@ -7,12 +7,6 @@
 
 set -e
 
-# Проверка root
-if [ "$(id -u)" -ne 0 ]; then
-    echo "Ошибка: Скрипт должен запускаться от root"
-    exit 1
-fi
-
 if [ $# -lt 2 ]; then
     echo "Использование: $0 <server_name> <tailscale_ip> [angie_port] [cadvisor_port]"
     echo "Пример: $0 web-server-01 100.87.187.88 8081 8080"
@@ -64,17 +58,19 @@ if ! timeout 10 curl -s "http://$TAILSCALE_IP:9100/metrics" | grep -q "node_cpu_
 fi
 echo "✓ Node Exporter доступен"
 
-# Проверяем cAdvisor
+# Проверяем cAdvisor (если порт указан)
 CADVISOR_AVAILABLE=false
-echo "Проверяем cAdvisor на $TAILSCALE_IP:$CADVISOR_PORT..."
-if timeout 10 curl -s "http://$TAILSCALE_IP:$CADVISOR_PORT/metrics" 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
-    CADVISOR_AVAILABLE=true
-    echo "✓ cAdvisor доступен на порту $CADVISOR_PORT (host установка)"
-else
-    echo "⚠ cAdvisor недоступен на порту $CADVISOR_PORT (не будет добавлен)"
+if [ -n "$CADVISOR_PORT" ]; then
+    echo "Проверяем cAdvisor на $TAILSCALE_IP:$CADVISOR_PORT..."
+    if timeout 10 curl -s "http://$TAILSCALE_IP:$CADVISOR_PORT/metrics" 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
+        CADVISOR_AVAILABLE=true
+        echo "✓ cAdvisor доступен на порту $CADVISOR_PORT"
+    else
+        echo "⚠ cAdvisor недоступен на порту $CADVISOR_PORT (не будет добавлен)"
+    fi
 fi
 
-# Проверяем Angie (если указан порт)
+# Проверяем Angie (если порт указан)
 ANGIE_AVAILABLE=false
 if [ -n "$ANGIE_PORT" ]; then
     echo "Проверяем метрики Angie на $TAILSCALE_IP:$ANGIE_PORT..."
@@ -84,12 +80,10 @@ if [ -n "$ANGIE_PORT" ]; then
     else
         echo "⚠ Метрики Angie недоступны на порту $ANGIE_PORT (не будет добавлен)"
     fi
-else
-    echo "ℹ Порт Angie не указан, пропускаем"
 fi
 
 # =============================================================================
-# СОЗДАНИЕ КОНФИГУРАЦИИ PROMETHEUS
+# СОЗДАНИЕ КОНФИГУРАЦИИ PROMETHEUS (только для доступных сервисов)
 # =============================================================================
 
 # Создаем новую job секцию для сервера
@@ -108,7 +102,7 @@ NEW_JOB_CONFIG="
     scrape_interval: 30s
     scrape_timeout: 10s"
 
-# cAdvisor (если доступен)
+# cAdvisor (только если доступен)
 if [ "$CADVISOR_AVAILABLE" = true ]; then
     NEW_JOB_CONFIG="$NEW_JOB_CONFIG
 
@@ -124,8 +118,8 @@ if [ "$CADVISOR_AVAILABLE" = true ]; then
     scrape_timeout: 10s"
 fi
 
-# Angie (если доступен)
-if [ "$ANGIE_AVAILABLE" = true ] && [ -n "$ANGIE_PORT" ]; then
+# Angie (только если доступен)
+if [ "$ANGIE_AVAILABLE" = true ]; then
     NEW_JOB_CONFIG="$NEW_JOB_CONFIG
 
   # $SERVER_NAME - Angie
@@ -170,13 +164,6 @@ if curl -X POST http://localhost:9090/-/reload; then
 else
     echo "⚠ Не удалось перезагрузить конфигурацию через API, перезапускаем сервис..."
     systemctl restart prometheus
-    sleep 5
-    if systemctl is-active --quiet prometheus; then
-        echo "✓ Prometheus перезапущен"
-    else
-        echo "✗ Ошибка перезапуска Prometheus"
-        exit 1
-    fi
 fi
 
 # Ждем несколько секунд и проверяем новые targets
@@ -205,12 +192,12 @@ if [ "$CADVISOR_AVAILABLE" = true ]; then
     echo "- cAdvisor (host): $SERVER_NAME-cadvisor -> $TAILSCALE_IP:$CADVISOR_PORT"
 fi
 
-if [ "$ANGIE_AVAILABLE" = true ] && [ -n "$ANGIE_PORT" ]; then
+if [ "$ANGIE_AVAILABLE" = true ]; then
     echo "- Angie: $SERVER_NAME-angie -> $TAILSCALE_IP:$ANGIE_PORT/prometheus"
 fi
 
 echo ""
-echo "Проверить статус: http://localhost:9090/targets (или ваш Prometheus URL)"
+echo "Проверить статус: https://prometheus.yourdomain.com/targets"
 echo ""
 echo "📊 Рекомендуемые дашборды Grafana:"
 echo "- Node Exporter Full: ID 1860"

@@ -3,21 +3,22 @@
 # С проверкой актуальности скрипта
 
 if [ $# -lt 2 ]; then
-    echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP [ANGIE_PORT]"
-    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"web-server-01\" \"100.87.187.88\" \"8080\""
+    echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP [ANGIE_PORT] [CADVISOR_PORT]"
+    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"web-server-01\" \"100.87.187.88\" \"8081\" \"8080\""
+    echo "  - Если порт не нужен, укажите пустую строку: \"\""
     exit 1
 fi
 
 SERVER_NAME="$1"
 TAILSCALE_IP="$2"
 ANGIE_PORT="${3:-}"
+CADVISOR_PORT="${4:-}"
 
 echo "=== Добавление сервера в мониторинг ==="
 echo "Сервер: $SERVER_NAME"
 echo "IP: $TAILSCALE_IP"
-if [ -n "$ANGIE_PORT" ]; then
-    echo "Angie порт: $ANGIE_PORT"
-fi
+if [ -n "$ANGIE_PORT" ]; then echo "Angie порт: $ANGIE_PORT"; fi
+if [ -n "$CADVISOR_PORT" ]; then echo "cAdvisor порт: $CADVISOR_PORT"; fi
 echo ""
 
 SCRIPT_NAME="add_server_to_monitoring.sh"
@@ -40,7 +41,7 @@ fi
 # Скачиваем скрипт если нужно
 if [ "$NEED_DOWNLOAD" = true ]; then
     echo "⬇️  Скачиваем актуальный скрипт..."
-    if ! wget -q "$SCRIPT_URL"; then
+    if ! wget -q "$SCRIPT_URL" -O "$SCRIPT_NAME"; then
         echo "❌ Ошибка скачивания скрипта"
         exit 1
     fi
@@ -51,12 +52,8 @@ fi
 echo ""
 echo "🚀 Запускаем добавление сервера..."
 
-# Запускаем с параметрами
-if [ -n "$ANGIE_PORT" ]; then
-    ./"$SCRIPT_NAME" "$SERVER_NAME" "$TAILSCALE_IP" "$ANGIE_PORT"
-else
-    ./"$SCRIPT_NAME" "$SERVER_NAME" "$TAILSCALE_IP"
-fi
+# Запускаем с параметрами (теперь с cadvisor_port)
+./"$SCRIPT_NAME" "$SERVER_NAME" "$TAILSCALE_IP" "$ANGIE_PORT" "$CADVISOR_PORT"
 
 echo ""
 echo "✅ Готово!"
