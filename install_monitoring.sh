@@ -37,7 +37,7 @@ if [ -t 0 ]; then
     while true; do
         printf "Введите уникальное имя сервера (латиницей, без пробелов): "
         read -r SERVER_NAME
-        SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')  # Авто-удаление пробелов, если случайно ввели
+        SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')  # Авто-удаление пробелов
         if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] && [ -n "$SERVER_NAME" ]; then 
             break
         else
@@ -56,7 +56,7 @@ else
     printf "Автоматически определено имя сервера: %s\n" "$SERVER_NAME"
 fi
 
-# NODE EXPORTER
+# NODE EXPORTER (без изменений, работает корректно)
 NODE_EXPORTER_INSTALLED=false
 NODE_EXPORTER_VER="1.9.1"
 
@@ -139,29 +139,22 @@ for i in {1..3}; do
     fi
 done
 
-# CADVISOR (полноценная установка, как в запросе)
+# CADVISOR (обновлено: проверка сервиса/метрик всегда, даже если порт занят)
 CADVISOR_INSTALLED=false
 CADVISOR_PORT="8080"
 
 printf "=== Проверка и установка cAdvisor ===\n"
 
-if ss -tuln | grep -q ":$CADVISOR_PORT "; then
-    printf "⚠ Порт $CADVISOR_PORT занят, пропускаем установку cAdvisor\n"
+# Сначала проверяем, активен ли сервис и доступны метрики (независимо от порта)
+if systemctl is-active --quiet cadvisor 2>/dev/null && timeout 5 curl -s http://localhost:8080/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
+    printf "✓ cAdvisor уже запущен и метрики доступны (порт занят, но сервис работает)\n"
+    CADVISOR_INSTALLED=true
 else
-    if systemctl is-active --quiet cadvisor 2>/dev/null; then
-        printf "✓ Найден запущенный cAdvisor, проверяем метрики...\n"
-        if timeout 5 curl -s http://localhost:8080/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
-            printf "✓ cAdvisor уже установлен и работает корректно\n"
-            CADVISOR_INSTALLED=true
-        else
-            printf "⚠ cAdvisor запущен, но метрики недоступны, переустанавливаем...\n"
-            systemctl stop cadvisor
-        fi
+    # Если не активен, проверяем порт
+    if ss -tuln | grep -q ":$CADVISOR_PORT "; then
+        printf "⚠ Порт $CADVISOR_PORT занят другим процессом, пропускаем установку cAdvisor\n"
     else
         printf "cAdvisor не найден, устанавливаем на хост...\n"
-    fi
-
-    if [ "$CADVISOR_INSTALLED" = false ]; then
         systemctl stop cadvisor 2>/dev/null || true
         systemctl disable cadvisor 2>/dev/null || true
         docker stop cadvisor 2>/dev/null || true
@@ -215,6 +208,7 @@ EOF
     fi
 fi
 
+# Проверка метрик (если установлен или уже работал)
 if [ "$CADVISOR_INSTALLED" = true ]; then
     printf "Проверка метрик cAdvisor...\n"
     for i in {1..5}; do
@@ -227,11 +221,12 @@ if [ "$CADVISOR_INSTALLED" = true ]; then
         fi
         if [ $i -eq 5 ]; then 
             printf "⚠ cAdvisor метрики недоступны\n"
+            CADVISOR_INSTALLED=false  # Сброс, если метрики не подтверждены
         fi
     done
 fi
 
-# ANGIE
+# ANGIE (без изменений)
 ANGIE_DETECTED=false
 ANGIE_METRICS_PORT=""
 
@@ -257,7 +252,7 @@ else
     printf "ℹ Angie не обнаружен\n"
 fi
 
-# СОХРАНЕНИЕ
+# СОХРАНЕНИЕ (без изменений)
 cat > /etc/monitoring-info.conf << EOF
 SERVER_NAME="$SERVER_NAME"
 TAILSCALE_IP="$TAILSCALE_IP"
@@ -272,7 +267,7 @@ NODE_EXPORTER_VERSION="$NODE_EXPORTER_VER"
 CADVISOR_VERSION="$CADVISOR_VERSION"
 EOF
 
-# ФИНАЛЬНЫЙ ВЫВОД (унифицированный, как в вашей версии)
+# ФИНАЛЬНЫЙ ВЫВОД (уточнённый)
 printf "\n==================================================\n"
 printf "🎉 УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!\n"
 printf "==================================================\n"
@@ -282,7 +277,9 @@ printf "Архитектура: %s (%s)\n" "$ARCH" "$ARCH_SUFFIX"
 printf "Node Exporter: http://%s:9100/metrics\n" "$TAILSCALE_IP"
 
 if [ "$CADVISOR_INSTALLED" = true ]; then
-    printf "cAdvisor: http://%s:8080/metrics\n" "$TAILSCALE_IP"
+    printf "cAdvisor: http://%s:8080/metrics (установлен или уже работал)\n" "$TAILSCALE_IP"
+else
+    printf "cAdvisor: Пропущен (порт занят или ошибка установки)\n"
 fi
 
 if [ "$ANGIE_DETECTED" = true ] && [ -n "$ANGIE_METRICS_PORT" ]; then
@@ -301,4 +298,4 @@ if [ "$CADVISOR_INSTALLED" = true ]; then
 fi
 
 printf "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s %s\n" "$COMMAND_ARGS"
-printf "\n✅ Готово! Node Exporter + cAdvisor установлены как нативные сервисы. Сервер готов к мониторингу.\n"
+printf "\n✅ Готово! Сервер готов к мониторингу.\n"
