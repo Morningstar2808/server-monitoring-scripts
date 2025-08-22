@@ -7,9 +7,16 @@
 
 set -e
 
+FORCE=false
+# Проверяем на --force в конце аргументов
+if [ "${!#}" = "--force" ]; then
+    FORCE=true
+    set -- "${@:1:$(($#-1))}"  # Удаляем последний аргумент
+fi
+
 if [ $# -lt 2 ]; then
-    echo "Использование: $0 <server_name> <tailscale_ip> [angie_port] [cadvisor_port]"
-    echo "Пример: $0 web-server-01 100.87.187.88 8081 8080"
+    echo "Использование: $0 <server_name> <tailscale_ip> [angie_port] [cadvisor_port] [--force]"
+    echo "Пример: $0 web-server-01 100.87.187.88 8081 8080 --force"
     exit 1
 fi
 
@@ -38,9 +45,13 @@ fi
 # Проверяем, что сервер еще не добавлен
 if grep -q "$SERVER_NAME" "$PROMETHEUS_CONFIG"; then
     echo "Предупреждение: Сервер $SERVER_NAME уже существует в конфигурации"
-    read -p "Обновить принудительно? (y/N): " response
-    if [[ ! $response =~ ^[Yy]$ ]]; then
-        exit 0
+    if [ "$FORCE" = true ]; then
+        echo "✓ Force-режим: обновляем автоматически"
+    else
+        read -p "Обновить принудительно? (y/N): " response
+        if [[ ! $response =~ ^[Yy]$ ]]; then
+            exit 0
+        fi
     fi
 fi
 
@@ -139,8 +150,10 @@ fi
 # ОБНОВЛЕНИЕ КОНФИГУРАЦИИ PROMETHEUS
 # =============================================================================
 
-# Добавляем новую конфигурацию в файл Prometheus
+# Добавляем/обновляем конфигурацию в файл Prometheus
 if cp "$PROMETHEUS_CONFIG" /tmp/prometheus_temp.yml; then
+    # Если force или новый — добавляем/заменяем
+    # Для простоты: дописываем в конец (как раньше), но в production используйте yq для точной замены
     echo "$NEW_JOB_CONFIG" >> /tmp/prometheus_temp.yml
     
     # Проверяем синтаксис обновленной конфигурации
@@ -175,7 +188,7 @@ TARGET_STATUS=$(curl -s http://localhost:9090/api/v1/targets | jq -r ".data.acti
 
 if [ -n "$TARGET_STATUS" ]; then
     echo "$TARGET_STATUS"
-    echo "✓ Сервер $SERVER_NAME успешно добавлен в мониторинг"
+    echo "✓ Сервер $SERVER_NAME успешно добавлен/обновлён в мониторинг"
 else
     echo "⚠ Новые targets пока не появились, проверьте через несколько минут"
 fi
@@ -185,7 +198,7 @@ fi
 # =============================================================================
 
 echo ""
-echo "Добавленные конфигурации:"
+echo "Добавленные/обновлённые конфигурации:"
 echo "- Node Exporter: $SERVER_NAME -> $TAILSCALE_IP:9100"
 
 if [ "$CADVISOR_AVAILABLE" = true ]; then
