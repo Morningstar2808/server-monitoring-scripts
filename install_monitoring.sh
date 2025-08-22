@@ -7,6 +7,12 @@
 set -e
 printf "=== Установка мониторинга сервера ===\n"
 
+# Проверка root
+if [ "$(id -u)" -ne 0 ]; then
+    printf "Ошибка: Скрипт должен запускаться от root\n"
+    exit 1
+fi
+
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64) ARCH_SUFFIX="amd64";;
@@ -51,7 +57,7 @@ fi
 
 # NODE EXPORTER
 NODE_EXPORTER_INSTALLED=false
-NODE_EXPORTER_VER="1.9.1"
+NODE_EXPORTER_VER="1.9.1"  # Актуальная версия на момент анализа; обновите при необходимости
 
 printf "=== Проверка Node Exporter ===\n"
 if systemctl is-active --quiet node_exporter 2>/dev/null; then
@@ -134,6 +140,11 @@ CADVISOR_PORT="8080"
 
 printf "=== Проверка и установка cAdvisor ===\n"
 
+# Проверка, занят ли порт
+if ss -tuln | grep -q ":$CADVISOR_PORT "; then
+    printf "⚠ Порт $CADVISOR_PORT занят, проверьте и освободите перед установкой\n"
+fi
+
 if systemctl is-active --quiet cadvisor 2>/dev/null; then
     printf "✓ Найден запущенный cAdvisor, проверяем метрики...\n"
     if timeout 5 curl -s http://localhost:8080/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
@@ -168,7 +179,7 @@ if [ "$CADVISOR_INSTALLED" = false ]; then
         mv "cadvisor-${CADVISOR_VERSION}-linux-${CADVISOR_ARCH}" /usr/local/bin/cadvisor
         chmod +x /usr/local/bin/cadvisor
         
-        printf "Создаем сервис cAdvisor (минимальная конфигурация)...\n"
+        printf "Создаем сервис cAdvisor (с флагами для стабильности)...\n"
         cat > /etc/systemd/system/cadvisor.service << 'EOF'
 [Unit]
 Description=cAdvisor
@@ -177,7 +188,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/cadvisor
+ExecStart=/usr/local/bin/cadvisor --port=8080 --listen_ip=0.0.0.0
 Restart=always
 RestartSec=10
 
