@@ -2,20 +2,27 @@
 
 # =============================================================================
 # Скрипт для добавления нового сервера в конфигурацию Prometheus
-# Выполняется на центральном сервере мониторинга под root
+# Выполняется на центральном сервере мониторинга
 # =============================================================================
 
 set -e
 
+# Проверка root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Ошибка: Скрипт должен запускаться от root"
+    exit 1
+fi
+
 if [ $# -lt 2 ]; then
-    echo "Использование: $0 <server_name> <tailscale_ip> [angie_port]"
-    echo "Пример: $0 web-server-01 100.87.187.88 8080"
+    echo "Использование: $0 <server_name> <tailscale_ip> [angie_port] [cadvisor_port]"
+    echo "Пример: $0 web-server-01 100.87.187.88 8081 8080"
     exit 1
 fi
 
 SERVER_NAME="$1"
 TAILSCALE_IP="$2"
 ANGIE_PORT="${3:-}"
+CADVISOR_PORT="${4:-8080}"
 
 PROMETHEUS_CONFIG="/etc/prometheus/prometheus.yml"
 BACKUP_DIR="/etc/prometheus/backups"
@@ -37,13 +44,19 @@ fi
 # Проверяем, что сервер еще не добавлен
 if grep -q "$SERVER_NAME" "$PROMETHEUS_CONFIG"; then
     echo "Предупреждение: Сервер $SERVER_NAME уже существует в конфигурации"
-    read -p "Продолжить обновление? (y/N): " response
+    read -p "Обновить принудительно? (y/N): " response
     if [[ ! $response =~ ^[Yy]$ ]]; then
         exit 0
     fi
 fi
 
-# Проверяем доступность Node Exporter
+# =============================================================================
+# ПРОВЕРКА ДОСТУПНОСТИ СЕРВИСОВ
+# =============================================================================
+
+echo "Проверяем доступность сервисов на $TAILSCALE_IP..."
+
+# Проверяем Node Exporter (обязательно)
 echo "Проверяем доступность Node Exporter на $TAILSCALE_IP:9100..."
 if ! timeout 10 curl -s "http://$TAILSCALE_IP:9100/metrics" | grep -q "node_cpu_seconds_total"; then
     echo "Ошибка: Node Exporter недоступен на $TAILSCALE_IP:9100"
@@ -51,27 +64,71 @@ if ! timeout 10 curl -s "http://$TAILSCALE_IP:9100/metrics" | grep -q "node_cpu_
 fi
 echo "✓ Node Exporter доступен"
 
+# Проверяем cAdvisor
+CADVISOR_AVAILABLE=false
+echo "Проверяем cAdvisor на $TAILSCALE_IP:$CADVISOR_PORT..."
+if timeout 10 curl -s "http://$TAILSCALE_IP:$CADVISOR_PORT/metrics" 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
+    CADVISOR_AVAILABLE=true
+    echo "✓ cAdvisor доступен на порту $CADVISOR_PORT (host установка)"
+else
+    echo "⚠ cAdvisor недоступен на порту $CADVISOR_PORT (не будет добавлен)"
+fi
+
+# Проверяем Angie (если указан порт)
+ANGIE_AVAILABLE=false
+if [ -n "$ANGIE_PORT" ]; then
+    echo "Проверяем метрики Angie на $TAILSCALE_IP:$ANGIE_PORT..."
+    if timeout 10 curl -s "http://$TAILSCALE_IP:$ANGIE_PORT/prometheus" 2>/dev/null | grep -q "angie_"; then
+        ANGIE_AVAILABLE=true
+        echo "✓ Метрики Angie доступны на порту $ANGIE_PORT"
+    else
+        echo "⚠ Метрики Angie недоступны на порту $ANGIE_PORT (не будет добавлен)"
+    fi
+else
+    echo "ℹ Порт Angie не указан, пропускаем"
+fi
+
+# =============================================================================
+# СОЗДАНИЕ КОНФИГУРАЦИИ PROMETHEUS
+# =============================================================================
+
 # Создаем новую job секцию для сервера
+NEW_JOB_CONFIG=""
+
+# Node Exporter (обязательно)
 NEW_JOB_CONFIG="
-  # $SERVER_NAME
+  # $SERVER_NAME - Node Exporter
   - job_name: '$SERVER_NAME'
     static_configs:
       - targets: ['$TAILSCALE_IP:9100']
         labels:
           server_name: '$SERVER_NAME'
-          server_type: 'remote'
+          service_type: 'node_exporter'
           environment: 'production'
     scrape_interval: 30s
     scrape_timeout: 10s"
 
-# Проверяем и добавляем конфигурацию для Angie (если указан порт)
-if [ -n "$ANGIE_PORT" ] && [ "$ANGIE_PORT" != "null" ] && [ "$ANGIE_PORT" != "" ]; then
-    echo "Проверяем метрики Angie на $TAILSCALE_IP:$ANGIE_PORT..."
-    if timeout 10 curl -s "http://$TAILSCALE_IP:$ANGIE_PORT/prometheus" | grep -q "angie_"; then
-        echo "✓ Метрики Angie доступны"
-        NEW_JOB_CONFIG="$NEW_JOB_CONFIG
+# cAdvisor (если доступен)
+if [ "$CADVISOR_AVAILABLE" = true ]; then
+    NEW_JOB_CONFIG="$NEW_JOB_CONFIG
 
-  # $SERVER_NAME Angie
+  # $SERVER_NAME - cAdvisor (host)
+  - job_name: '$SERVER_NAME-cadvisor'
+    static_configs:
+      - targets: ['$TAILSCALE_IP:$CADVISOR_PORT']
+        labels:
+          server_name: '$SERVER_NAME'
+          service_type: 'cadvisor_host'
+          environment: 'production'
+    scrape_interval: 30s
+    scrape_timeout: 10s"
+fi
+
+# Angie (если доступен)
+if [ "$ANGIE_AVAILABLE" = true ] && [ -n "$ANGIE_PORT" ]; then
+    NEW_JOB_CONFIG="$NEW_JOB_CONFIG
+
+  # $SERVER_NAME - Angie
   - job_name: '$SERVER_NAME-angie'
     static_configs:
       - targets: ['$TAILSCALE_IP:$ANGIE_PORT']
@@ -82,10 +139,11 @@ if [ -n "$ANGIE_PORT" ] && [ "$ANGIE_PORT" != "null" ] && [ "$ANGIE_PORT" != "" 
     metrics_path: '/prometheus'
     scrape_interval: 30s
     scrape_timeout: 10s"
-    else
-        echo "⚠ Метрики Angie недоступны на порту $ANGIE_PORT"
-    fi
 fi
+
+# =============================================================================
+# ОБНОВЛЕНИЕ КОНФИГУРАЦИИ PROMETHEUS
+# =============================================================================
 
 # Добавляем новую конфигурацию в файл Prometheus
 if cp "$PROMETHEUS_CONFIG" /tmp/prometheus_temp.yml; then
@@ -112,6 +170,13 @@ if curl -X POST http://localhost:9090/-/reload; then
 else
     echo "⚠ Не удалось перезагрузить конфигурацию через API, перезапускаем сервис..."
     systemctl restart prometheus
+    sleep 5
+    if systemctl is-active --quiet prometheus; then
+        echo "✓ Prometheus перезапущен"
+    else
+        echo "✗ Ошибка перезапуска Prometheus"
+        exit 1
+    fi
 fi
 
 # Ждем несколько секунд и проверяем новые targets
@@ -128,11 +193,28 @@ else
     echo "⚠ Новые targets пока не появились, проверьте через несколько минут"
 fi
 
+# =============================================================================
+# ФИНАЛЬНЫЙ ОТЧЕТ
+# =============================================================================
+
 echo ""
 echo "Добавленные конфигурации:"
 echo "- Node Exporter: $SERVER_NAME -> $TAILSCALE_IP:9100"
-if [ -n "$ANGIE_PORT" ] && [ "$ANGIE_PORT" != "null" ]; then
+
+if [ "$CADVISOR_AVAILABLE" = true ]; then
+    echo "- cAdvisor (host): $SERVER_NAME-cadvisor -> $TAILSCALE_IP:$CADVISOR_PORT"
+fi
+
+if [ "$ANGIE_AVAILABLE" = true ] && [ -n "$ANGIE_PORT" ]; then
     echo "- Angie: $SERVER_NAME-angie -> $TAILSCALE_IP:$ANGIE_PORT/prometheus"
 fi
+
 echo ""
-echo "Проверить статус: https://prometheus.yourdomain.com/targets"
+echo "Проверить статус: http://localhost:9090/targets (или ваш Prometheus URL)"
+echo ""
+echo "📊 Рекомендуемые дашборды Grafana:"
+echo "- Node Exporter Full: ID 1860"
+echo "- Docker Container & Host Metrics: ID 10619"
+if [ "$CADVISOR_AVAILABLE" = true ]; then
+    echo "- Docker and system monitoring: ID 893"
+fi
