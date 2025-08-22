@@ -37,10 +37,11 @@ if [ -t 0 ]; then
     while true; do
         printf "Введите уникальное имя сервера (латиницей, без пробелов): "
         read -r SERVER_NAME
-        if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]]; then 
+        SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')  # Авто-удаление пробелов, если случайно ввели
+        if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] && [ -n "$SERVER_NAME" ]; then 
             break
         else
-            printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания\n"
+            printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания (без пробелов). Попробуйте снова.\n"
         fi
     done
 else
@@ -57,7 +58,7 @@ fi
 
 # NODE EXPORTER
 NODE_EXPORTER_INSTALLED=false
-NODE_EXPORTER_VER="1.9.1"  # Актуальная версия на момент анализа; обновите при необходимости
+NODE_EXPORTER_VER="1.9.1"
 
 printf "=== Проверка Node Exporter ===\n"
 if systemctl is-active --quiet node_exporter 2>/dev/null; then
@@ -81,13 +82,16 @@ if [ "$NODE_EXPORTER_INSTALLED" = false ]; then
     printf "Загружаем Node Exporter %s...\n" "$NODE_EXPORTER_VER"
     
     cd /tmp && rm -rf node_exporter-* && wget -q --show-progress "$DOWNLOAD_URL" || { printf "Ошибка загрузки\n"; exit 1; }
+    printf "Распаковка архива...\n"
     tar -xzf "node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}.tar.gz"
+    printf "Установка Node Exporter...\n"
     cp "node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}/node_exporter" /usr/local/bin/
     chmod +x /usr/local/bin/node_exporter
     
     useradd -M -r -s /bin/false node_exporter 2>/dev/null || true
     chown node_exporter:node_exporter /usr/local/bin/node_exporter
     
+    printf "Создаем systemd сервис...\n"
     cat > /etc/systemd/system/node_exporter.service << 'EOF'
 [Unit]
 Description=Prometheus Node Exporter
@@ -106,6 +110,7 @@ WantedBy=multi-user.target
 EOF
     
     systemctl daemon-reload && systemctl enable node_exporter && systemctl start node_exporter
+    printf "Ожидание запуска сервиса...\n"
     sleep 3
     
     if systemctl is-active --quiet node_exporter; then
@@ -134,53 +139,51 @@ for i in {1..3}; do
     fi
 done
 
-# CADVISOR
+# CADVISOR (полноценная установка, как в запросе)
 CADVISOR_INSTALLED=false
 CADVISOR_PORT="8080"
 
 printf "=== Проверка и установка cAdvisor ===\n"
 
-# Проверка, занят ли порт
 if ss -tuln | grep -q ":$CADVISOR_PORT "; then
-    printf "⚠ Порт $CADVISOR_PORT занят, проверьте и освободите перед установкой\n"
-fi
-
-if systemctl is-active --quiet cadvisor 2>/dev/null; then
-    printf "✓ Найден запущенный cAdvisor, проверяем метрики...\n"
-    if timeout 5 curl -s http://localhost:8080/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
-        printf "✓ cAdvisor уже установлен и работает корректно\n"
-        CADVISOR_INSTALLED=true
-    else
-        printf "⚠ cAdvisor запущен, но метрики недоступны, переустанавливаем...\n"
-        systemctl stop cadvisor
-    fi
+    printf "⚠ Порт $CADVISOR_PORT занят, пропускаем установку cAdvisor\n"
 else
-    printf "cAdvisor не найден, устанавливаем на хост...\n"
-fi
+    if systemctl is-active --quiet cadvisor 2>/dev/null; then
+        printf "✓ Найден запущенный cAdvisor, проверяем метрики...\n"
+        if timeout 5 curl -s http://localhost:8080/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
+            printf "✓ cAdvisor уже установлен и работает корректно\n"
+            CADVISOR_INSTALLED=true
+        else
+            printf "⚠ cAdvisor запущен, но метрики недоступны, переустанавливаем...\n"
+            systemctl stop cadvisor
+        fi
+    else
+        printf "cAdvisor не найден, устанавливаем на хост...\n"
+    fi
 
-if [ "$CADVISOR_INSTALLED" = false ]; then
-    systemctl stop cadvisor 2>/dev/null || true
-    systemctl disable cadvisor 2>/dev/null || true
-    docker stop cadvisor 2>/dev/null || true
-    docker rm cadvisor 2>/dev/null || true
-    
-    case "$ARCH" in
-        x86_64) CADVISOR_ARCH="amd64";;
-        aarch64) CADVISOR_ARCH="arm64";;
-        armv7l) CADVISOR_ARCH="arm";;
-        *) printf "Неподдерживаемая архитектура для cAdvisor: %s\n" "$ARCH"; exit 1;;
-    esac
-    
-    CADVISOR_VERSION="v0.49.1"
-    cd /tmp
-    printf "Загружаем cAdvisor %s для %s...\n" "$CADVISOR_VERSION" "$CADVISOR_ARCH"
-    
-    if wget -q --show-progress "https://github.com/google/cadvisor/releases/download/${CADVISOR_VERSION}/cadvisor-${CADVISOR_VERSION}-linux-${CADVISOR_ARCH}"; then
-        mv "cadvisor-${CADVISOR_VERSION}-linux-${CADVISOR_ARCH}" /usr/local/bin/cadvisor
-        chmod +x /usr/local/bin/cadvisor
+    if [ "$CADVISOR_INSTALLED" = false ]; then
+        systemctl stop cadvisor 2>/dev/null || true
+        systemctl disable cadvisor 2>/dev/null || true
+        docker stop cadvisor 2>/dev/null || true
+        docker rm cadvisor 2>/dev/null || true
         
-        printf "Создаем сервис cAdvisor (с флагами для стабильности)...\n"
-        cat > /etc/systemd/system/cadvisor.service << 'EOF'
+        case "$ARCH" in
+            x86_64) CADVISOR_ARCH="amd64";;
+            aarch64) CADVISOR_ARCH="arm64";;
+            armv7l) CADVISOR_ARCH="arm";;
+            *) printf "Неподдерживаемая архитектура для cAdvisor: %s\n" "$ARCH"; exit 1;;
+        esac
+        
+        CADVISOR_VERSION="v0.49.1"
+        cd /tmp
+        printf "Загружаем cAdvisor %s для %s...\n" "$CADVISOR_VERSION" "$CADVISOR_ARCH"
+        
+        if wget -q --show-progress "https://github.com/google/cadvisor/releases/download/${CADVISOR_VERSION}/cadvisor-${CADVISOR_VERSION}-linux-${CADVISOR_ARCH}"; then
+            mv "cadvisor-${CADVISOR_VERSION}-linux-${CADVISOR_ARCH}" /usr/local/bin/cadvisor
+            chmod +x /usr/local/bin/cadvisor
+            
+            printf "Создаем сервис cAdvisor (с флагами для стабильности)...\n"
+            cat > /etc/systemd/system/cadvisor.service << 'EOF'
 [Unit]
 Description=cAdvisor
 After=network.target
@@ -195,19 +198,20 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-        
-        systemctl daemon-reload && systemctl enable cadvisor && systemctl start cadvisor
-        sleep 5
-        
-        if systemctl is-active --quiet cadvisor; then
-            printf "✓ cAdvisor успешно запущен\n"
-            CADVISOR_INSTALLED=true
+            
+            systemctl daemon-reload && systemctl enable cadvisor && systemctl start cadvisor
+            sleep 5
+            
+            if systemctl is-active --quiet cadvisor; then
+                printf "✓ cAdvisor успешно запущен\n"
+                CADVISOR_INSTALLED=true
+            else
+                printf "⚠ Ошибка запуска cAdvisor\n"
+                systemctl status cadvisor --no-pager
+            fi
         else
-            printf "⚠ Ошибка запуска cAdvisor\n"
-            systemctl status cadvisor --no-pager
+            printf "⚠ Не удалось загрузить cAdvisor, продолжаем без него\n"
         fi
-    else
-        printf "⚠ Не удалось загрузить cAdvisor, продолжаем без него\n"
     fi
 fi
 
@@ -268,12 +272,12 @@ NODE_EXPORTER_VERSION="$NODE_EXPORTER_VER"
 CADVISOR_VERSION="$CADVISOR_VERSION"
 EOF
 
-# ФИНАЛЬНЫЙ ВЫВОД
+# ФИНАЛЬНЫЙ ВЫВОД (унифицированный, как в вашей версии)
 printf "\n==================================================\n"
-printf "🎉 УСТАНОВКА ЗАВЕРШЕНА!\n"
+printf "🎉 УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!\n"
 printf "==================================================\n"
 printf "Сервер: %s\n" "$SERVER_NAME"
-printf "IP: %s\n" "$TAILSCALE_IP"
+printf "IP адрес: %s\n" "$TAILSCALE_IP"
 printf "Архитектура: %s (%s)\n" "$ARCH" "$ARCH_SUFFIX"
 printf "Node Exporter: http://%s:9100/metrics\n" "$TAILSCALE_IP"
 
@@ -285,7 +289,7 @@ if [ "$ANGIE_DETECTED" = true ] && [ -n "$ANGIE_METRICS_PORT" ]; then
     printf "Angie: http://%s:%s/prometheus\n" "$TAILSCALE_IP" "$ANGIE_METRICS_PORT"
 fi
 
-printf "\n📋 ДОБАВЛЕНИЕ В МОНИТОРИНГ:\n"
+printf "\n📋 ДЛЯ ДОБАВЛЕНИЯ В ЦЕНТРАЛЬНЫЙ МОНИТОРИНГ:\n"
 printf "На сервере Prometheus выполните:\n\n"
 
 COMMAND_ARGS="\"$SERVER_NAME\" \"$TAILSCALE_IP\""
@@ -293,8 +297,8 @@ if [ -n "$ANGIE_METRICS_PORT" ]; then
     COMMAND_ARGS="$COMMAND_ARGS \"$ANGIE_METRICS_PORT\""
 fi
 if [ "$CADVISOR_INSTALLED" = true ]; then 
-    COMMAND_ARGS="$COMMAND_ARGS \"8080\""
+    COMMAND_ARGS="$COMMAND_ARGS \"$CADVISOR_PORT\""
 fi
 
 printf "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s %s\n" "$COMMAND_ARGS"
-printf "\n✅ Готово! Node Exporter + cAdvisor установлены как нативные сервисы\n"
+printf "\n✅ Готово! Node Exporter + cAdvisor установлены как нативные сервисы. Сервер готов к мониторингу.\n"
