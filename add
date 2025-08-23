@@ -3,8 +3,8 @@
 # С проверкой актуальности скрипта
 
 if [ $# -lt 2 ]; then
-    echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP [ANGIE_PORT] [CADVISOR_PORT]"
-    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"web-server-01\" \"100.87.187.88\" \"8081\" \"8080\""
+    echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP [ANGIE_PORT] [CADVISOR_PORT] [--force]"
+    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"web-server-01\" \"100.87.187.88\" \"8081\" \"8080\" --force"
     echo "  - Если порт не нужен, укажите пустую строку: \"\""
     exit 1
 fi
@@ -13,6 +13,10 @@ SERVER_NAME="$1"
 TAILSCALE_IP="$2"
 ANGIE_PORT="${3:-}"
 CADVISOR_PORT="${4:-}"
+FORCE_ARG=""
+if [ "${5:-}" = "--force" ]; then
+    FORCE_ARG="--force"
+fi
 
 echo "=== Добавление сервера в мониторинг ==="
 echo "Сервер: $SERVER_NAME"
@@ -29,7 +33,6 @@ NEED_DOWNLOAD=true
 if [ -f "$SCRIPT_NAME" ]; then
     echo "📄 Найден локальный скрипт $SCRIPT_NAME"
     
-    # Проверяем возраст файла (если старше 1 дня - обновляем)
     if [ $(find "$SCRIPT_NAME" -mtime -1 2>/dev/null | wc -l) -gt 0 ]; then
         echo "✅ Скрипт актуальный (обновлен менее суток назад)"
         NEED_DOWNLOAD=false
@@ -52,8 +55,8 @@ fi
 echo ""
 echo "🚀 Запускаем добавление сервера..."
 
-# Запускаем с параметрами (теперь с cadvisor_port)
-./"$SCRIPT_NAME" "$SERVER_NAME" "$TAILSCALE_IP" "$ANGIE_PORT" "$CADVISOR_PORT"
+# Запускаем с параметрами
+./"$SCRIPT_NAME" "$SERVER_NAME" "$TAILSCALE_IP" "$ANGIE_PORT" "$CADVISOR_PORT" "$FORCE_ARG"
 
 echo ""
 echo "✅ Готово!"

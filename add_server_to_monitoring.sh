@@ -26,8 +26,11 @@ CADVISOR_PORT="${4:-8080}"
 TARGETS_DIR="/etc/prometheus/targets"
 mkdir -p "$TARGETS_DIR/node" "$TARGETS_DIR/cadvisor" "$TARGETS_DIR/angie"
 
-# Проверяем, существует ли файл (для force)
 NODE_FILE="$TARGETS_DIR/node/$SERVER_NAME.yml"
+CADVISOR_FILE="$TARGETS_DIR/cadvisor/$SERVER_NAME.yml"
+ANGIE_FILE="$TARGETS_DIR/angie/$SERVER_NAME.yml"
+
+# Проверяем существование (для force)
 if [ -f "$NODE_FILE" ] && [ "$FORCE" != true ]; then
     echo "Предупреждение: Сервер $SERVER_NAME уже существует"
     read -p "Обновить? (y/N): " response
@@ -36,7 +39,7 @@ if [ -f "$NODE_FILE" ] && [ "$FORCE" != true ]; then
     fi
 fi
 
-# Проверки доступности (как раньше)
+# Проверки доступности
 echo "Проверяем доступность сервисов на $TAILSCALE_IP..."
 
 echo "Проверяем Node Exporter на $TAILSCALE_IP:9100..."
@@ -69,6 +72,8 @@ if [ -n "$ANGIE_PORT" ]; then
 fi
 
 # Генерация YAML-файлов
+echo "Генерируем/обновляем YAML-файлы в $TARGETS_DIR..."
+
 cat > "$NODE_FILE" << EOF
 - targets: ['$TAILSCALE_IP:9100']
   labels:
@@ -78,7 +83,6 @@ cat > "$NODE_FILE" << EOF
 EOF
 
 if [ "$CADVISOR_AVAILABLE" = true ]; then
-    CADVISOR_FILE="$TARGETS_DIR/cadvisor/$SERVER_NAME.yml"
     cat > "$CADVISOR_FILE" << EOF
 - targets: ['$TAILSCALE_IP:$CADVISOR_PORT']
   labels:
@@ -86,10 +90,11 @@ if [ "$CADVISOR_AVAILABLE" = true ]; then
     service_type: 'cadvisor_host'
     environment: 'production'
 EOF
+else
+    rm -f "$CADVISOR_FILE"  # Удаляем, если недоступен
 fi
 
 if [ "$ANGIE_AVAILABLE" = true ]; then
-    ANGIE_FILE="$TARGETS_DIR/angie/$SERVER_NAME.yml"
     cat > "$ANGIE_FILE" << EOF
 - targets: ['$TAILSCALE_IP:$ANGIE_PORT']
   labels:
@@ -97,6 +102,45 @@ if [ "$ANGIE_AVAILABLE" = true ]; then
     service_type: 'angie'
     environment: 'production'
 EOF
+else
+    rm -f "$ANGIE_FILE"  # Удаляем, если недоступен
 fi
 
-chown -R prometheus
+chown -R prometheus:prometheus "$TARGETS_DIR"
+echo "✓ YAML-файлы обновлены"
+
+# Reload Prometheus для подхвата изменений
+if curl -X POST http://localhost:9090/-/reload; then
+    echo "✓ Конфигурация Prometheus перезагружена"
+else
+    echo "⚠ Не удалось reload, перезапускаем сервис..."
+    systemctl restart prometheus
+fi
+
+# Проверка targets
+sleep 5
+echo ""
+echo "=== Проверка новых targets ==="
+TARGET_STATUS=$(curl -s http://localhost:9090/api/v1/targets | jq -r ".data.activeTargets[] | select(.labels.server_name==\"$SERVER_NAME\") | \"\(.labels.job): \(.health)\"")
+
+if [ -n "$TARGET_STATUS" ]; then
+    echo "$TARGET_STATUS"
+    echo "✓ Сервер $SERVER_NAME успешно добавлен/обновлён"
+else
+    echo "⚠ Targets пока не появились, подождите refresh_interval (1m) или проверьте логи"
+fi
+
+# Финальный отчёт
+echo ""
+echo "Добавленные/обновлённые файлы:"
+echo "- Node Exporter: $NODE_FILE"
+if [ "$CADVISOR_AVAILABLE" = true ]; then echo "- cAdvisor: $CADVISOR_FILE"; fi
+if [ "$ANGIE_AVAILABLE" = true ]; then echo "- Angie: $ANGIE_FILE"; fi
+
+echo ""
+echo "Проверить статус: http://localhost:9090/targets"
+echo ""
+echo "📊 Рекомендуемые дашборды Grafana:"
+echo "- Node Exporter Full: ID 1860"
+echo "- Docker Container & Host Metrics: ID 10619"
+if [ "$CADVISOR_AVAILABLE" = true ]; then echo "- Docker and system monitoring: ID 893"; fi
