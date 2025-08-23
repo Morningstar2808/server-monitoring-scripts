@@ -69,33 +69,34 @@ check_port_process() {
     fi
 }
 
-# Функция для поиска свободного порта в указанном диапазоне
+# Функция для поиска свободного порта в указанном диапазоне (ИСПРАВЛЕНА)
 find_free_port_range() {
     local start_port=$1
     local end_port=$2
     local service_name=${3:-"unknown"}
     
-    printf "Поиск свободного порта для %s в диапазоне %d-%d...\n" "$service_name" "$start_port" "$end_port"
+    # Выводим логи в stderr, чтобы они не попали в переменную
+    printf "Поиск свободного порта для %s в диапазоне %d-%d...\n" "$service_name" "$start_port" "$end_port" >&2
     
     for port in $(seq $start_port $end_port); do
         local process=$(check_port_process $port)
         if [ -z "$process" ]; then
-            printf "✓ Найден свободный порт %d для %s\n" "$port" "$service_name"
-            echo $port
+            printf "✓ Найден свободный порт %d для %s\n" "$port" "$service_name" >&2
+            echo $port  # Только порт идёт в stdout
             return
         elif [ "$process" = "cadvisor" ] && [ "$service_name" = "cAdvisor" ]; then
             # Переиспользуем существующий cAdvisor
             if timeout 5 curl -s http://localhost:$port/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
-                printf "✓ Обнаружен рабочий cAdvisor на порту %d (переиспользуем)\n" "$port"
+                printf "✓ Обнаружен рабочий cAdvisor на порту %d (переиспользуем)\n" "$port" >&2
                 echo $port
                 return
             fi
         fi
-        printf "⚠ Порт %d занят процессом '%s', проверяем следующий...\n" "$port" "$process"
+        printf "⚠ Порт %d занят процессом '%s', проверяем следующий...\n" "$port" "$process" >&2
     done
     
-    printf "❌ Не найдено свободных портов в диапазоне %d-%d для %s\n" "$start_port" "$end_port" "$service_name"
-    echo ""
+    printf "❌ Не найдено свободных портов в диапазоне %d-%d для %s\n" "$start_port" "$end_port" "$service_name" >&2
+    echo ""  # Пустая строка в stdout
 }
 
 # NODE EXPORTER
