@@ -2,17 +2,18 @@
 # Обертка для добавления сервера в мониторинг одной командой
 # С проверкой актуальности скрипта
 
-if [ $# -lt 2 ]; then
-    echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP [ANGIE_PORT] [CADVISOR_PORT] [--force]"
-    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"web-server-01\" \"100.87.187.88\" \"8081\" \"8080\" --force"
-    echo "  - Если порт не нужен, укажите пустую строку: \"\""
+if [ $# -lt 4 ]; then
+    echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP ANGIE_PORT CADVISOR_PORT [--force]"
+    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"rocket\" \"100.77.125.71\" \"\" \"9080\" --force"
+    echo "  - Укажите \"\" для порта, если он не нужен (ANGIE_PORT всегда 3-й, CADVISOR_PORT всегда 4-й)."
+    echo "  - --force для автоматического обновления без подтверждения."
     exit 1
 fi
 
 SERVER_NAME="$1"
 TAILSCALE_IP="$2"
-ANGIE_PORT="${3:-}"
-CADVISOR_PORT="${4:-}"
+ANGIE_PORT="$3"
+CADVISOR_PORT="$4"
 FORCE_ARG=""
 if [ "${5:-}" = "--force" ]; then
     FORCE_ARG="--force"
@@ -21,8 +22,9 @@ fi
 echo "=== Добавление сервера в мониторинг ==="
 echo "Сервер: $SERVER_NAME"
 echo "IP: $TAILSCALE_IP"
-if [ -n "$ANGIE_PORT" ]; then echo "Angie порт: $ANGIE_PORT"; fi
-if [ -n "$CADVISOR_PORT" ]; then echo "cAdvisor порт: $CADVISOR_PORT"; fi
+echo "Angie порт: ${ANGIE_PORT:-не указан}"
+echo "cAdvisor порт: ${CADVISOR_PORT:-не указан}"
+if [ -n "$FORCE_ARG" ]; then echo "Режим: force (автоматическое обновление)"; fi
 echo ""
 
 SCRIPT_NAME="add_server_to_monitoring.sh"
@@ -60,3 +62,4 @@ echo "🚀 Запускаем добавление сервера..."
 
 echo ""
 echo "✅ Готово!"
+

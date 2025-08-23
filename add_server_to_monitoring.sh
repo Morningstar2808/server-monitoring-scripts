@@ -14,14 +14,14 @@ fi
 
 if [ $# -lt 2 ]; then
     echo "Использование: $0 <server_name> <tailscale_ip> [angie_port] [cadvisor_port] [--force]"
-    echo "Пример: $0 remnawave 100.79.31.83 '' 8080 --force"
+    echo "Пример: $0 remnawave 100.79.31.83 '' 9080 --force"
     exit 1
 fi
 
 SERVER_NAME="$1"
 TAILSCALE_IP="$2"
 ANGIE_PORT="${3:-}"
-CADVISOR_PORT="${4:-8080}"
+CADVISOR_PORT="${4:-}"
 
 TARGETS_DIR="/etc/prometheus/targets"
 mkdir -p "$TARGETS_DIR/node" "$TARGETS_DIR/cadvisor" "$TARGETS_DIR/angie"
@@ -91,7 +91,7 @@ if [ "$CADVISOR_AVAILABLE" = true ]; then
     environment: 'production'
 EOF
 else
-    rm -f "$CADVISOR_FILE"  # Удаляем, если недоступен
+    rm -f "$CADVISOR_FILE"
 fi
 
 if [ "$ANGIE_AVAILABLE" = true ]; then
@@ -103,13 +103,13 @@ if [ "$ANGIE_AVAILABLE" = true ]; then
     environment: 'production'
 EOF
 else
-    rm -f "$ANGIE_FILE"  # Удаляем, если недоступен
+    rm -f "$ANGIE_FILE"
 fi
 
 chown -R prometheus:prometheus "$TARGETS_DIR"
 echo "✓ YAML-файлы обновлены"
 
-# Reload Prometheus для подхвата изменений
+# Reload Prometheus
 if curl -X POST http://localhost:9090/-/reload; then
     echo "✓ Конфигурация Prometheus перезагружена"
 else
