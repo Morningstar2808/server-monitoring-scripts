@@ -8,7 +8,54 @@
 set -e
 printf "=== Установка мониторинга сервера ===\n"
 
-# [... проверки root, архитектуры, IP, SERVER_NAME остаются без изменений ...]
+# Проверка root
+if [ "$(id -u)" -ne 0 ]; then
+    printf "Ошибка: Скрипт должен запускаться от root\n"
+    exit 1
+fi
+
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64) ARCH_SUFFIX="amd64";;
+    aarch64) ARCH_SUFFIX="arm64";;
+    armv7l) ARCH_SUFFIX="armv7";;
+    armv6l) ARCH_SUFFIX="armv6";;
+    *) printf "Ошибка: Неподдерживаемая архитектура: %s\n" "$ARCH"; exit 1;;
+esac
+printf "Архитектура: %s -> %s\n" "$ARCH" "$ARCH_SUFFIX"
+
+TAILSCALE_IP=""
+if command -v tailscale > /dev/null 2>&1; then
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null | head -n1 || echo "")
+fi
+if [ -z "$TAILSCALE_IP" ]; then
+    TAILSCALE_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' | head -n1 2>/dev/null || echo "127.0.0.1")
+fi
+printf "Определен IP: %s\n" "$TAILSCALE_IP"
+
+SERVER_NAME=""
+if [ -t 0 ]; then
+    while true; do
+        printf "Введите уникальное имя сервера (латиницей, без пробелов): "
+        read -r SERVER_NAME
+        SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')
+        if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] && [ -n "$SERVER_NAME" ]; then 
+            break
+        else
+            printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания (без пробелов). Попробуйте снова.\n"
+        fi
+    done
+else
+    if [ -f /etc/hostname ]; then
+        SERVER_NAME=$(cat /etc/hostname | tr -cd 'a-zA-Z0-9_-' | head -c 15)
+    else
+        SERVER_NAME="server-$(date +%s | tail -c 6)"
+    fi
+    if ! [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] || [ -z "$SERVER_NAME" ]; then
+        SERVER_NAME="server-$(date +%s | tail -c 6)"
+    fi
+    printf "Автоматически определено имя сервера: %s\n" "$SERVER_NAME"
+fi
 
 # Функция для проверки, какой процесс занимает порт
 check_port_process() {
@@ -51,7 +98,88 @@ find_free_port_range() {
     echo ""
 }
 
-# [... NODE EXPORTER секция остается без изменений ...]
+# NODE EXPORTER
+NODE_EXPORTER_INSTALLED=false
+NODE_EXPORTER_VER="1.9.1"
+
+printf "=== Проверка Node Exporter ===\n"
+if systemctl is-active --quiet node_exporter 2>/dev/null; then
+    printf "✓ Найден запущенный Node Exporter, проверяем метрики...\n"
+    if timeout 5 curl -s http://localhost:9100/metrics 2>/dev/null | grep -q "node_cpu_seconds_total"; then
+        printf "✓ Node Exporter уже установлен и работает корректно\n"
+        NODE_EXPORTER_INSTALLED=true
+    else
+        printf "⚠ Node Exporter запущен, но метрики недоступны, переустанавливаем...\n"
+        systemctl stop node_exporter
+    fi
+else
+    printf "Node Exporter не найден, устанавливаем...\n"
+fi
+
+if [ "$NODE_EXPORTER_INSTALLED" = false ]; then
+    systemctl stop node_exporter 2>/dev/null || true
+    systemctl disable node_exporter 2>/dev/null || true
+    
+    DOWNLOAD_URL="https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VER}/node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}.tar.gz"
+    printf "Загружаем Node Exporter %s...\n" "$NODE_EXPORTER_VER"
+    
+    cd /tmp && rm -rf node_exporter-* && wget -q --show-progress "$DOWNLOAD_URL" || { printf "Ошибка загрузки\n"; exit 1; }
+    printf "Распаковка архива...\n"
+    tar -xzf "node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}.tar.gz"
+    printf "Установка Node Exporter...\n"
+    cp "node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}/node_exporter" /usr/local/bin/
+    chmod +x /usr/local/bin/node_exporter
+    
+    useradd -M -r -s /bin/false node_exporter 2>/dev/null || true
+    chown node_exporter:node_exporter /usr/local/bin/node_exporter
+    
+    printf "Создаем systemd сервис...\n"
+    cat > /etc/systemd/system/node_exporter.service << 'EOF'
+[Unit]
+Description=Prometheus Node Exporter
+After=network.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    systemctl daemon-reload && systemctl enable node_exporter && systemctl start node_exporter
+    printf "Ожидание запуска сервиса...\n"
+    sleep 3
+    
+    if systemctl is-active --quiet node_exporter; then
+        printf "✓ Node Exporter успешно запущен\n"
+        NODE_EXPORTER_INSTALLED=true
+    else
+        printf "✗ Ошибка запуска Node Exporter\n"
+        systemctl status node_exporter --no-pager
+        exit 1
+    fi
+    rm -rf /tmp/node_exporter-*
+fi
+
+printf "Финальная проверка метрик Node Exporter...\n"
+for i in {1..3}; do
+    if timeout 5 curl -s http://localhost:9100/metrics 2>/dev/null | grep -q "node_cpu_seconds_total"; then
+        printf "✓ Метрики Node Exporter доступны\n"
+        break
+    else
+        printf "Попытка %d/3...\n" "$i"
+        sleep 2
+    fi
+    if [ $i -eq 3 ]; then 
+        printf "✗ Node Exporter недоступен\n"
+        exit 1
+    fi
+done
 
 # CADVISOR (обновлено: использует диапазон 9080-9089)
 CADVISOR_INSTALLED=false
@@ -194,7 +322,20 @@ else
     printf "ℹ Angie не обнаружен\n"
 fi
 
-# [... остальная часть без изменений ...]
+# СОХРАНЕНИЕ
+cat > /etc/monitoring-info.conf << EOF
+SERVER_NAME="$SERVER_NAME"
+TAILSCALE_IP="$TAILSCALE_IP"
+ARCH="$ARCH"
+NODE_EXPORTER_INSTALLED="$NODE_EXPORTER_INSTALLED"
+CADVISOR_INSTALLED="$CADVISOR_INSTALLED"
+CADVISOR_PORT="$CADVISOR_PORT"
+ANGIE_DETECTED="$ANGIE_DETECTED"
+ANGIE_METRICS_PORT="$ANGIE_METRICS_PORT"
+INSTALL_DATE="$(date -Iseconds)"
+NODE_EXPORTER_VERSION="$NODE_EXPORTER_VER"
+CADVISOR_VERSION="$CADVISOR_VERSION"
+EOF
 
 # ФИНАЛЬНЫЙ ВЫВОД с пояснением портов
 printf "\n==================================================\n"
