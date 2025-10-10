@@ -1,12 +1,12 @@
 #!/bin/bash
 # Обертка для добавления сервера в мониторинг одной командой
-# С проверкой актуальности скрипта
+# Версия 2.0.0 - всегда скачивает актуальную версию
 
 if [ $# -lt 4 ]; then
     echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP ANGIE_PORT CADVISOR_PORT [--force]"
-    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"rocket\" \"100.77.125.71\" \"\" \"9080\" --force"
-    echo "  - Укажите \"\" для порта, если он не нужен (ANGIE_PORT всегда 3-й, CADVISOR_PORT всегда 4-й)."
-    echo "  - --force для автоматического обновления без подтверждения."
+    echo "Пример: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s \"rocket\" \"100.77.125.71\" \"8082\" \"9080\" --force"
+    echo "  - Укажите \"\" для порта, если он не нужен"
+    echo "  - --force для автоматического обновления без подтверждения"
     exit 1
 fi
 
@@ -14,52 +14,33 @@ SERVER_NAME="$1"
 TAILSCALE_IP="$2"
 ANGIE_PORT="$3"
 CADVISOR_PORT="$4"
-FORCE_ARG=""
-if [ "${5:-}" = "--force" ]; then
-    FORCE_ARG="--force"
-fi
+FORCE_ARG="${5:-}"
 
 echo "=== Добавление сервера в мониторинг ==="
 echo "Сервер: $SERVER_NAME"
 echo "IP: $TAILSCALE_IP"
 echo "Angie порт: ${ANGIE_PORT:-не указан}"
 echo "cAdvisor порт: ${CADVISOR_PORT:-не указан}"
-if [ -n "$FORCE_ARG" ]; then echo "Режим: force (автоматическое обновление)"; fi
+if [ "$FORCE_ARG" = "--force" ]; then echo "Режим: force"; fi
 echo ""
 
 SCRIPT_NAME="add_server_to_monitoring.sh"
 SCRIPT_URL="https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/$SCRIPT_NAME"
-NEED_DOWNLOAD=true
 
-# Проверяем, есть ли уже скрипт и актуальный ли он
-if [ -f "$SCRIPT_NAME" ]; then
-    echo "📄 Найден локальный скрипт $SCRIPT_NAME"
-    
-    if [ $(find "$SCRIPT_NAME" -mtime -1 2>/dev/null | wc -l) -gt 0 ]; then
-        echo "✅ Скрипт актуальный (обновлен менее суток назад)"
-        NEED_DOWNLOAD=false
-    else
-        echo "⚠️  Скрипт устарел, обновляем..."
-    fi
-fi
-
-# Скачиваем скрипт если нужно
-if [ "$NEED_DOWNLOAD" = true ]; then
-    echo "⬇️  Скачиваем актуальный скрипт..."
-    if ! wget -q "$SCRIPT_URL" -O "$SCRIPT_NAME"; then
-        echo "❌ Ошибка скачивания скрипта"
-        exit 1
-    fi
+# Всегда скачиваем свежую версию (принудительно перезаписываем)
+echo "⬇️  Скачиваем актуальный скрипт..."
+if wget -q -O "$SCRIPT_NAME" "$SCRIPT_URL" 2>/dev/null || curl -fsSL -o "$SCRIPT_NAME" "$SCRIPT_URL" 2>/dev/null; then
     chmod +x "$SCRIPT_NAME"
     echo "✅ Скрипт обновлен"
+else
+    echo "❌ Ошибка скачивания скрипта"
+    exit 1
 fi
 
 echo ""
 echo "🚀 Запускаем добавление сервера..."
 
-# Запускаем с параметрами
 ./"$SCRIPT_NAME" "$SERVER_NAME" "$TAILSCALE_IP" "$ANGIE_PORT" "$CADVISOR_PORT" "$FORCE_ARG"
 
 echo ""
 echo "✅ Готово!"
-
