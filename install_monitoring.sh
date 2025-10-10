@@ -2,7 +2,7 @@
 
 # =============================================================================
 # Скрипт быстрой установки Node Exporter с автообнаружением Angie и cAdvisor
-# Версия 2.0.0 - с автообновлением и исправлениями для Angie
+# Версия 2.1.0 - с исправлениями для Angie и проверками дубликатов
 # =============================================================================
 
 set -e
@@ -16,7 +16,7 @@ fi
 # ============================================================================
 # САМООБНОВЛЕНИЕ СКРИПТА
 # ============================================================================
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 SCRIPT_URL="https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/install_monitoring.sh"
 SCRIPT_NAME="$(basename "$0")"
 UPDATE_CHECK_FILE="/tmp/.monitoring_install_update_check"
@@ -362,7 +362,7 @@ if [ "$CADVISOR_INSTALLED" = true ] && [ -n "$CADVISOR_PORT" ]; then
 fi
 
 # ============================================================================
-# ANGIE (исправленная версия с проверкой дублирования)
+# ANGIE (версия 2.1.0 с проверкой дубликатов и правильным include)
 # ============================================================================
 
 ANGIE_DETECTED=false
@@ -379,6 +379,9 @@ if pgrep -x "angie" > /dev/null; then
         ANGIE_METRICS_PORT=$(find_free_port_range 8081 8089 "Angie metrics")
         
         if [ -n "$ANGIE_METRICS_PORT" ]; then
+            # Создаём директорию если не существует
+            mkdir -p /etc/angie/http.d
+            
             cat > /etc/angie/http.d/prometheus-metrics.conf << EOF
 server {
     listen $ANGIE_METRICS_PORT;
@@ -389,18 +392,31 @@ server {
     }
 }
 EOF
+            printf "✓ Создан файл /etc/angie/http.d/prometheus-metrics.conf на порту %s\n" "$ANGIE_METRICS_PORT"
             
-            # Улучшенная проверка наличия include (без дублирования)
+            # Проверяем наличие prometheus_all.conf (БЕЗ дублирования)
             if ! grep -qE '^\s*include\s+prometheus_all\.conf\s*;' /etc/angie/angie.conf; then
                 printf "Добавляем prometheus_all.conf в конфигурацию...\n"
                 if grep -qE "^\s*http\s*\{" /etc/angie/angie.conf; then
                     sed -i '/^\s*http\s*{/a \    include prometheus_all.conf;' /etc/angie/angie.conf
-                    printf "✓ prometheus_all.conf добавлен в конфигурацию\n"
-                else
-                    printf "⚠ Не найден блок http { в angie.conf\n"
+                    printf "✓ prometheus_all.conf добавлен\n"
                 fi
             else
-                printf "ℹ prometheus_all.conf уже подключен в конфигурации\n"
+                printf "ℹ prometheus_all.conf уже подключен\n"
+            fi
+            
+            # КРИТИЧЕСКИ ВАЖНО: Проверяем наличие include для http.d (БЕЗ дублирования)
+            if ! grep -qE '^\s*include\s+/etc/angie/http\.d/\*\.conf\s*;' /etc/angie/angie.conf; then
+                printf "Добавляем подключение http.d в конфигурацию...\n"
+                # Вставляем после prometheus_all.conf если он есть, иначе после http {
+                if grep -qE '^\s*include\s+prometheus_all\.conf\s*;' /etc/angie/angie.conf; then
+                    sed -i '/^\s*include\s\+prometheus_all\.conf\s*;/a \    include /etc/angie/http.d/*.conf;' /etc/angie/angie.conf
+                elif grep -qE "^\s*http\s*\{" /etc/angie/angie.conf; then
+                    sed -i '/^\s*http\s*{/a \    include /etc/angie/http.d/*.conf;' /etc/angie/angie.conf
+                fi
+                printf "✓ http.d подключен в конфигурацию\n"
+            else
+                printf "ℹ http.d уже подключен\n"
             fi
             
             # Добавляем status_zone
@@ -421,26 +437,39 @@ EOF
             
             printf "Проверяем конфигурацию Angie...\n"
             if angie -t 2>&1; then
-                systemctl reload angie
-                sleep 2
+                printf "Перезапускаем Angie для применения изменений...\n"
+                systemctl restart angie
+                sleep 5
                 
                 printf "Проверяем доступность метрик на порту %s...\n" "$ANGIE_METRICS_PORT"
-                if timeout 5 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_"; then
-                    printf "✓ Метрики Angie настроены и работают на порту %s\n" "$ANGIE_METRICS_PORT"
+                
+                # Проверяем что порт слушается
+                if ss -tlnp | grep -q ":$ANGIE_METRICS_PORT "; then
+                    printf "✓ Порт %s открыт\n" "$ANGIE_METRICS_PORT"
                     
-                    if timeout 5 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_http_server_zones"; then
-                        printf "✓ Метрики HTTP Server Zones обнаружены\n"
+                    # Проверяем метрики
+                    if timeout 10 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_"; then
+                        printf "✓ Метрики Angie работают на порту %s\n" "$ANGIE_METRICS_PORT"
+                        
+                        if timeout 10 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_http_server_zones"; then
+                            printf "✓ Метрики HTTP Server Zones обнаружены\n"
+                        else
+                            printf "⚠ Метрики HTTP Server Zones появятся после трафика\n"
+                        fi
                     else
-                        printf "⚠ Метрики HTTP Server Zones пока не появились (нужен трафик)\n"
+                        printf "⚠ Метрики не отвечают, но порт открыт\n"
+                        printf "Попробуйте позже: curl http://localhost:%s/prometheus\n" "$ANGIE_METRICS_PORT"
                     fi
                 else
-                    printf "⚠ Метрики Angie недоступны на порту %s\n" "$ANGIE_METRICS_PORT"
+                    printf "❌ Порт %s не открыт\n" "$ANGIE_METRICS_PORT"
+                    printf "Проверьте конфигурацию: cat /etc/angie/http.d/prometheus-metrics.conf\n"
+                    printf "Проверьте include: grep 'http.d' /etc/angie/angie.conf\n"
                     ANGIE_METRICS_PORT=""
-                    rm -f /etc/angie/http.d/prometheus-metrics.conf
                 fi
             else
                 printf "❌ Ошибка конфигурации Angie:\n"
                 angie -t 2>&1 | head -5
+                printf "Удаляем некорректную конфигурацию...\n"
                 rm -f /etc/angie/http.d/prometheus-metrics.conf
                 ANGIE_METRICS_PORT=""
             fi
@@ -453,20 +482,34 @@ EOF
         ANGIE_METRICS_PORT=$(grep -oP 'listen\s+(127\.0\.0\.1:)?\K[0-9]+' /etc/angie/http.d/prometheus-metrics.conf 2>/dev/null | head -n1)
         
         if [ -n "$ANGIE_METRICS_PORT" ]; then
-            if timeout 5 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_"; then
+            # Проверяем include http.d (БЕЗ дублирования)
+            if ! grep -qE '^\s*include\s+/etc/angie/http\.d/\*\.conf\s*;' /etc/angie/angie.conf; then
+                printf "⚠ Обнаружен prometheus-metrics.conf, но http.d не подключен. Исправляем...\n"
+                if grep -qE '^\s*include\s+prometheus_all\.conf\s*;' /etc/angie/angie.conf; then
+                    sed -i '/^\s*include\s\+prometheus_all\.conf\s*;/a \    include /etc/angie/http.d/*.conf;' /etc/angie/angie.conf
+                elif grep -qE "^\s*http\s*\{" /etc/angie/angie.conf; then
+                    sed -i '/^\s*http\s*{/a \    include /etc/angie/http.d/*.conf;' /etc/angie/angie.conf
+                fi
+                systemctl restart angie
+                sleep 5
+            fi
+            
+            if timeout 10 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_"; then
                 printf "✓ Метрики Angie работают на порту %s\n" "$ANGIE_METRICS_PORT"
                 
+                # Исправляем 127.0.0.1 если нужно
                 if grep -q "listen 127.0.0.1:$ANGIE_METRICS_PORT" /etc/angie/http.d/prometheus-metrics.conf; then
                     printf "⚠ Обнаружена конфигурация с 127.0.0.1, исправляем...\n"
                     sed -i "s/listen 127.0.0.1:$ANGIE_METRICS_PORT/listen $ANGIE_METRICS_PORT/" /etc/angie/http.d/prometheus-metrics.conf
                     
                     if angie -t 2>&1; then
-                        systemctl reload angie
-                        sleep 2
+                        systemctl restart angie
+                        sleep 3
                         printf "✓ Конфигурация обновлена\n"
                     fi
                 fi
                 
+                # Добавляем status_zone если нет
                 printf "Проверяем наличие status_zone...\n"
                 cd /etc/angie/http.d/
                 ZONES_ADDED=0
@@ -486,10 +529,13 @@ EOF
                 
                 if [ $ZONES_ADDED -gt 0 ]; then
                     if angie -t 2>&1; then
-                        systemctl reload angie
+                        systemctl restart angie
                         printf "✓ Конфигурация Angie обновлена\n"
                     fi
                 fi
+            else
+                printf "⚠ Метрики не отвечают на порту %s\n" "$ANGIE_METRICS_PORT"
+                printf "Проверьте вручную: systemctl status angie && curl http://localhost:%s/prometheus\n" "$ANGIE_METRICS_PORT"
             fi
         fi
     fi
