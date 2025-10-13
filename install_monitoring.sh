@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Скрипт быстрой установки Node Exporter с автообнаружением Angie и cAdvisor
-# Версия 2.1.0 - с исправлениями для Angie и проверками дубликатов
+# Скрипт быстрой установки Node Exporter с автообнаружением Angie, cAdvisor и CrowdSec
+# Версия 2.2.0 - добавлена установка CrowdSec с отправкой метрик в VictoriaMetrics
 # =============================================================================
 
 set -e
@@ -16,7 +16,7 @@ fi
 # ============================================================================
 # САМООБНОВЛЕНИЕ СКРИПТА
 # ============================================================================
-SCRIPT_VERSION="2.1.0"
+SCRIPT_VERSION="2.2.0"
 SCRIPT_URL="https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/install_monitoring.sh"
 SCRIPT_NAME="$(basename "$0")"
 UPDATE_CHECK_FILE="/tmp/.monitoring_install_update_check"
@@ -38,15 +38,15 @@ else
 
     if [ "$SHOULD_CHECK" = true ]; then
         printf "🔄 Проверка обновлений скрипта...\n"
-        
+
         TEMP_SCRIPT="/tmp/install_monitoring_new.sh"
         if wget -q -O "$TEMP_SCRIPT" "$SCRIPT_URL" 2>/dev/null || curl -fsSL -o "$TEMP_SCRIPT" "$SCRIPT_URL" 2>/dev/null; then
             NEW_VERSION=$(grep -m1 '^SCRIPT_VERSION=' "$TEMP_SCRIPT" | cut -d'"' -f2)
-            
+
             if [ -n "$NEW_VERSION" ] && [ "$NEW_VERSION" != "$SCRIPT_VERSION" ]; then
                 printf "✨ Найдена новая версия: %s -> %s\n" "$SCRIPT_VERSION" "$NEW_VERSION"
                 printf "📥 Обновляем скрипт...\n"
-                
+
                 if [ -f "$0" ] && [ "$SCRIPT_NAME" != "bash" ]; then
                     cp "$TEMP_SCRIPT" "$0"
                     chmod +x "$0"
@@ -130,7 +130,7 @@ check_port_process() {
     local port=$1
     local output=$(ss -lpn | grep ":$port ")
     if [ -n "$output" ]; then
-        local process=$(echo "$output" | grep -oP 'users:\(\("([^"]+)"' | grep -oP '"\K[^"]+' 2>/dev/null || echo "unknown")
+        local process=$(echo "$output" | grep -oP 'users:\(\(\("([^"]+)"' | grep -oP '"\K[^"]+' 2>/dev/null || echo "unknown")
         echo "$process"
     else
         echo ""
@@ -141,9 +141,9 @@ find_free_port_range() {
     local start_port=$1
     local end_port=$2
     local service_name=${3:-"unknown"}
-    
+
     printf "Поиск свободного порта для %s в диапазоне %d-%d...\n" "$service_name" "$start_port" "$end_port" >&2
-    
+
     for port in $(seq $start_port $end_port); do
         local process=$(check_port_process $port)
         if [ -z "$process" ]; then
@@ -159,7 +159,7 @@ find_free_port_range() {
         fi
         printf "⚠ Порт %d занят процессом '%s', проверяем следующий...\n" "$port" "$process" >&2
     done
-    
+
     printf "❌ Не найдено свободных портов в диапазоне %d-%d для %s\n" "$start_port" "$end_port" "$service_name" >&2
     echo ""
 }
@@ -188,20 +188,20 @@ fi
 if [ "$NODE_EXPORTER_INSTALLED" = false ]; then
     systemctl stop node_exporter 2>/dev/null || true
     systemctl disable node_exporter 2>/dev/null || true
-    
+
     DOWNLOAD_URL="https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VER}/node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}.tar.gz"
     printf "Загружаем Node Exporter %s...\n" "$NODE_EXPORTER_VER"
-    
+
     cd /tmp && rm -rf node_exporter-* && wget -q --show-progress "$DOWNLOAD_URL" || { printf "Ошибка загрузки\n"; exit 1; }
     printf "Распаковка архива...\n"
     tar -xzf "node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}.tar.gz"
     printf "Установка Node Exporter...\n"
     cp "node_exporter-${NODE_EXPORTER_VER}.linux-${ARCH_SUFFIX}/node_exporter" /usr/local/bin/
     chmod +x /usr/local/bin/node_exporter
-    
+
     useradd -M -r -s /bin/false node_exporter 2>/dev/null || true
     chown node_exporter:node_exporter /usr/local/bin/node_exporter
-    
+
     printf "Создаем systemd сервис...\n"
     cat > /etc/systemd/system/node_exporter.service << 'EOF'
 [Unit]
@@ -219,11 +219,11 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+
     systemctl daemon-reload && systemctl enable node_exporter && systemctl start node_exporter
     printf "Ожидание запуска сервиса...\n"
     sleep 3
-    
+
     if systemctl is-active --quiet node_exporter; then
         printf "✓ Node Exporter успешно запущен\n"
         NODE_EXPORTER_INSTALLED=true
@@ -261,10 +261,10 @@ printf "\n=== Проверка и установка cAdvisor ===\n"
 
 if systemctl is-active --quiet cadvisor 2>/dev/null; then
     printf "✓ Обнаружен активный systemd сервис cAdvisor\n"
-    
+
     EXISTING_PORT=$(systemctl show cadvisor -p ExecStart --value 2>/dev/null | grep -oP '\--port=\K[0-9]+' || echo "9080")
     printf "Проверяем метрики cAdvisor на порту %s...\n" "$EXISTING_PORT"
-    
+
     if timeout 5 curl -s http://localhost:$EXISTING_PORT/metrics 2>/dev/null | grep -q "container_cpu_usage_seconds_total"; then
         printf "✓ cAdvisor работает корректно на порту %s (переиспользуем)\n" "$EXISTING_PORT"
         CADVISOR_INSTALLED=true
@@ -277,7 +277,7 @@ fi
 
 if [ "$CADVISOR_INSTALLED" = false ]; then
     CADVISOR_PORT=$(find_free_port_range 9080 9089 "cAdvisor")
-    
+
     if [ -z "$CADVISOR_PORT" ]; then
         printf "⚠ Не удалось найти свободный порт для cAdvisor в диапазоне 9080-9089\n"
         printf "   Попробуйте освободить порты или настройте cAdvisor вручную\n"
@@ -288,27 +288,27 @@ if [ "$CADVISOR_INSTALLED" = false ]; then
             CADVISOR_INSTALLED=true
         else
             printf "Устанавливаем cAdvisor на порт %s...\n" "$CADVISOR_PORT"
-            
+
             systemctl stop cadvisor 2>/dev/null || true
             systemctl disable cadvisor 2>/dev/null || true
             docker stop cadvisor 2>/dev/null || true
             docker rm cadvisor 2>/dev/null || true
-            
+
             case "$ARCH" in
                 x86_64) CADVISOR_ARCH="amd64";;
                 aarch64) CADVISOR_ARCH="arm64";;
                 armv7l) CADVISOR_ARCH="arm";;
                 *) printf "Неподдерживаемая архитектура для cAdvisor: %s\n" "$ARCH"; exit 1;;
             esac
-            
+
             CADVISOR_VERSION="v0.49.1"
             cd /tmp
             printf "Загружаем cAdvisor %s для %s...\n" "$CADVISOR_VERSION" "$CADVISOR_ARCH"
-            
+
             if wget -q --show-progress "https://github.com/google/cadvisor/releases/download/${CADVISOR_VERSION}/cadvisor-${CADVISOR_VERSION}-linux-${CADVISOR_ARCH}"; then
                 mv "cadvisor-${CADVISOR_VERSION}-linux-${CADVISOR_ARCH}" /usr/local/bin/cadvisor
                 chmod +x /usr/local/bin/cadvisor
-                
+
                 printf "Создаем сервис cAdvisor на порту %s...\n" "$CADVISOR_PORT"
                 cat > /etc/systemd/system/cadvisor.service << EOF
 [Unit]
@@ -326,10 +326,10 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-                
+
                 systemctl daemon-reload && systemctl enable cadvisor && systemctl start cadvisor
                 sleep 5
-                
+
                 if systemctl is-active --quiet cadvisor; then
                     printf "✓ cAdvisor успешно запущен на порту %s\n" "$CADVISOR_PORT"
                     CADVISOR_INSTALLED=true
@@ -362,7 +362,7 @@ if [ "$CADVISOR_INSTALLED" = true ] && [ -n "$CADVISOR_PORT" ]; then
 fi
 
 # ============================================================================
-# ANGIE (версия 2.1.0 с проверкой дубликатов и правильным include)
+# ANGIE
 # ============================================================================
 
 ANGIE_DETECTED=false
@@ -372,20 +372,19 @@ printf "\n=== Проверка Angie ===\n"
 if pgrep -x "angie" > /dev/null; then
     printf "✓ Angie обнаружен\n"
     ANGIE_DETECTED=true
-    
+
     if [ ! -f /etc/angie/http.d/prometheus-metrics.conf ]; then
         printf "Создаём конфигурацию метрик Angie...\n"
-        
+
         ANGIE_METRICS_PORT=$(find_free_port_range 8081 8089 "Angie metrics")
-        
+
         if [ -n "$ANGIE_METRICS_PORT" ]; then
-            # Создаём директорию если не существует
             mkdir -p /etc/angie/http.d
-            
+
             cat > /etc/angie/http.d/prometheus-metrics.conf << EOF
 server {
     listen $ANGIE_METRICS_PORT;
-    
+
     location /prometheus {
         prometheus all;
         access_log off;
@@ -393,8 +392,7 @@ server {
 }
 EOF
             printf "✓ Создан файл /etc/angie/http.d/prometheus-metrics.conf на порту %s\n" "$ANGIE_METRICS_PORT"
-            
-            # Проверяем наличие prometheus_all.conf (БЕЗ дублирования)
+
             if ! grep -qE '^\s*include\s+prometheus_all\.conf\s*;' /etc/angie/angie.conf; then
                 printf "Добавляем prometheus_all.conf в конфигурацию...\n"
                 if grep -qE "^\s*http\s*\{" /etc/angie/angie.conf; then
@@ -404,11 +402,9 @@ EOF
             else
                 printf "ℹ prometheus_all.conf уже подключен\n"
             fi
-            
-            # КРИТИЧЕСКИ ВАЖНО: Проверяем наличие include для http.d (БЕЗ дублирования)
+
             if ! grep -qE '^\s*include\s+/etc/angie/http\.d/\*\.conf\s*;' /etc/angie/angie.conf; then
                 printf "Добавляем подключение http.d в конфигурацию...\n"
-                # Вставляем после prometheus_all.conf если он есть, иначе после http {
                 if grep -qE '^\s*include\s+prometheus_all\.conf\s*;' /etc/angie/angie.conf; then
                     sed -i '/^\s*include\s\+prometheus_all\.conf\s*;/a \    include /etc/angie/http.d/*.conf;' /etc/angie/angie.conf
                 elif grep -qE "^\s*http\s*\{" /etc/angie/angie.conf; then
@@ -418,15 +414,14 @@ EOF
             else
                 printf "ℹ http.d уже подключен\n"
             fi
-            
-            # Добавляем status_zone
+
             printf "Добавляем status_zone в виртуальные хосты...\n"
             cd /etc/angie/http.d/
             for conf in *.conf; do
                 if [[ "$conf" == "prometheus-metrics.conf" ]]; then
                     continue
                 fi
-                
+
                 if ! grep -q "status_zone" "$conf"; then
                     ZONE_NAME=$(basename "$conf" .conf | tr '.' '_' | tr '-' '_')
                     sed -i '/^\s*server\s*{/a \    status_zone '"$ZONE_NAME"';' "$conf"
@@ -434,23 +429,21 @@ EOF
                 fi
             done
             cd - > /dev/null
-            
+
             printf "Проверяем конфигурацию Angie...\n"
             if angie -t 2>&1; then
                 printf "Перезапускаем Angie для применения изменений...\n"
                 systemctl restart angie
                 sleep 5
-                
+
                 printf "Проверяем доступность метрик на порту %s...\n" "$ANGIE_METRICS_PORT"
-                
-                # Проверяем что порт слушается
+
                 if ss -tlnp | grep -q ":$ANGIE_METRICS_PORT "; then
                     printf "✓ Порт %s открыт\n" "$ANGIE_METRICS_PORT"
-                    
-                    # Проверяем метрики
+
                     if timeout 10 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_"; then
                         printf "✓ Метрики Angie работают на порту %s\n" "$ANGIE_METRICS_PORT"
-                        
+
                         if timeout 10 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_http_server_zones"; then
                             printf "✓ Метрики HTTP Server Zones обнаружены\n"
                         else
@@ -462,8 +455,6 @@ EOF
                     fi
                 else
                     printf "❌ Порт %s не открыт\n" "$ANGIE_METRICS_PORT"
-                    printf "Проверьте конфигурацию: cat /etc/angie/http.d/prometheus-metrics.conf\n"
-                    printf "Проверьте include: grep 'http.d' /etc/angie/angie.conf\n"
                     ANGIE_METRICS_PORT=""
                 fi
             else
@@ -478,11 +469,10 @@ EOF
         fi
     else
         printf "ℹ Конфигурация метрик Angie уже существует\n"
-        
+
         ANGIE_METRICS_PORT=$(grep -oP 'listen\s+(127\.0\.0\.1:)?\K[0-9]+' /etc/angie/http.d/prometheus-metrics.conf 2>/dev/null | head -n1)
-        
+
         if [ -n "$ANGIE_METRICS_PORT" ]; then
-            # Проверяем include http.d (БЕЗ дублирования)
             if ! grep -qE '^\s*include\s+/etc/angie/http\.d/\*\.conf\s*;' /etc/angie/angie.conf; then
                 printf "⚠ Обнаружен prometheus-metrics.conf, но http.d не подключен. Исправляем...\n"
                 if grep -qE '^\s*include\s+prometheus_all\.conf\s*;' /etc/angie/angie.conf; then
@@ -493,23 +483,21 @@ EOF
                 systemctl restart angie
                 sleep 5
             fi
-            
+
             if timeout 10 curl -s "http://localhost:$ANGIE_METRICS_PORT/prometheus" 2>/dev/null | grep -q "angie_"; then
                 printf "✓ Метрики Angie работают на порту %s\n" "$ANGIE_METRICS_PORT"
-                
-                # Исправляем 127.0.0.1 если нужно
+
                 if grep -q "listen 127.0.0.1:$ANGIE_METRICS_PORT" /etc/angie/http.d/prometheus-metrics.conf; then
                     printf "⚠ Обнаружена конфигурация с 127.0.0.1, исправляем...\n"
                     sed -i "s/listen 127.0.0.1:$ANGIE_METRICS_PORT/listen $ANGIE_METRICS_PORT/" /etc/angie/http.d/prometheus-metrics.conf
-                    
+
                     if angie -t 2>&1; then
                         systemctl restart angie
                         sleep 3
                         printf "✓ Конфигурация обновлена\n"
                     fi
                 fi
-                
-                # Добавляем status_zone если нет
+
                 printf "Проверяем наличие status_zone...\n"
                 cd /etc/angie/http.d/
                 ZONES_ADDED=0
@@ -517,7 +505,7 @@ EOF
                     if [[ "$conf" == "prometheus-metrics.conf" ]]; then
                         continue
                     fi
-                    
+
                     if ! grep -q "status_zone" "$conf"; then
                         ZONE_NAME=$(basename "$conf" .conf | tr '.' '_' | tr '-' '_')
                         sed -i '/^\s*server\s*{/a \    status_zone '"$ZONE_NAME"';' "$conf"
@@ -526,7 +514,7 @@ EOF
                     fi
                 done
                 cd - > /dev/null
-                
+
                 if [ $ZONES_ADDED -gt 0 ]; then
                     if angie -t 2>&1; then
                         systemctl restart angie
@@ -535,17 +523,152 @@ EOF
                 fi
             else
                 printf "⚠ Метрики не отвечают на порту %s\n" "$ANGIE_METRICS_PORT"
-                printf "Проверьте вручную: systemctl status angie && curl http://localhost:%s/prometheus\n" "$ANGIE_METRICS_PORT"
             fi
         fi
     fi
-    
+
     if [ -z "$ANGIE_METRICS_PORT" ]; then
         printf "⚠ Не удалось настроить метрики Angie\n"
         ANGIE_DETECTED=false
     fi
 else
     printf "ℹ Angie не обнаружен\n"
+fi
+
+# ============================================================================
+# CROWDSEC
+# ============================================================================
+
+CROWDSEC_INSTALLED=false
+VICTORIAMETRICS_IP="100.87.29.86"
+
+printf "\n=== Проверка и установка CrowdSec ===\n"
+
+if command -v cscli > /dev/null 2>&1; then
+    printf "✓ CrowdSec уже установлен\n"
+    CROWDSEC_INSTALLED=true
+else
+    printf "Устанавливаем CrowdSec...\n"
+
+    if curl -s https://packagecloud.io/install/repositories/crowdsec/crowdsec/script.deb.sh | bash; then
+        apt-get update -qq
+        apt-get install -y crowdsec crowdsec-firewall-bouncer-nftables
+
+        printf "✓ CrowdSec установлен\n"
+        CROWDSEC_INSTALLED=true
+    else
+        printf "❌ Ошибка установки CrowdSec\n"
+    fi
+fi
+
+if [ "$CROWDSEC_INSTALLED" = true ]; then
+    printf "Устанавливаем коллекции CrowdSec...\n"
+    cscli hub update > /dev/null 2>&1
+    cscli collections install crowdsecurity/linux > /dev/null 2>&1
+    cscli collections install crowdsecurity/sshd > /dev/null 2>&1
+
+    if [ "$ANGIE_DETECTED" = true ]; then
+        cscli collections install crowdsecurity/nginx > /dev/null 2>&1
+        printf "✓ Установлены коллекции: linux, sshd, nginx\n"
+    else
+        printf "✓ Установлены коллекции: linux, sshd\n"
+    fi
+
+    if [ ! -f /etc/crowdsec/acquis.yaml.backup ]; then
+        cp /etc/crowdsec/acquis.yaml /etc/crowdsec/acquis.yaml.backup 2>/dev/null || true
+    fi
+
+    cat > /etc/crowdsec/acquis.yaml << 'EOF'
+source: file
+filenames:
+  - /var/log/auth.log
+labels:
+  type: syslog
+EOF
+
+    if [ "$ANGIE_DETECTED" = true ]; then
+        cat >> /etc/crowdsec/acquis.yaml << 'EOF'
+
+---
+source: file
+filenames:
+  - /var/log/angie/access.log
+  - /var/log/angie/error.log
+labels:
+  type: nginx
+EOF
+        printf "✓ Настроен сбор логов: auth.log, angie\n"
+    else
+        printf "✓ Настроен сбор логов: auth.log\n"
+    fi
+
+    printf "Настраиваем отправку метрик в VictoriaMetrics...\n"
+
+    cat > /etc/crowdsec/notifications/http.yaml << EOF
+type: http
+
+name: victoriametrics_push
+
+log_level: info
+
+format: |
+  {{range .}}cs_lapi_decision{instance="$SERVER_NAME",server_name="$SERVER_NAME",country="{{.Source.Cn}}",asname="{{.Source.AsName}}",asnumber="{{.Source.AsNumber}}",latitude="{{.Source.Latitude}}",longitude="{{.Source.Longitude}}",scenario="{{.Scenario}}",ip="{{.Source.IP}}",scope="{{range .Decisions}}{{.Scope}}{{end}}",value="{{range .Decisions}}{{.Value}}{{end}}"} 1
+  {{end}}
+
+url: http://$VICTORIAMETRICS_IP:8428/api/v1/import/prometheus
+
+method: POST
+
+headers:
+  Content-Type: text/plain
+
+timeout: 10s
+EOF
+
+    if [ ! -f /etc/crowdsec/profiles.yaml.backup ]; then
+        cp /etc/crowdsec/profiles.yaml /etc/crowdsec/profiles.yaml.backup 2>/dev/null || true
+    fi
+
+    cat > /etc/crowdsec/profiles.yaml << 'EOF'
+---
+name: send_to_victoriametrics
+filters:
+  - Alert.Remediation == true
+notifications:
+  - victoriametrics_push
+decisions:
+  - type: ban
+    duration: 4h
+on_success: continue
+
+---
+name: default_ip_remediation
+filters:
+ - Alert.Remediation == true && Alert.GetScope() == "Ip"
+decisions:
+ - type: ban
+   duration: 4h
+on_success: break
+EOF
+
+    printf "✓ Конфигурация CrowdSec завершена\n"
+
+    printf "Перезапускаем CrowdSec...\n"
+    systemctl restart crowdsec
+    sleep 3
+
+    if systemctl is-active --quiet crowdsec; then
+        printf "✓ CrowdSec успешно запущен\n"
+
+        if ps aux | grep -q "[n]otification-http"; then
+            printf "✓ HTTP notification плагин загружен\n"
+        else
+            printf "⚠ HTTP notification плагин загрузится при первом alert\n"
+        fi
+    else
+        printf "❌ Ошибка запуска CrowdSec\n"
+        systemctl status crowdsec --no-pager | head -20
+    fi
 fi
 
 # ============================================================================
@@ -561,6 +684,8 @@ CADVISOR_INSTALLED="$CADVISOR_INSTALLED"
 CADVISOR_PORT="$CADVISOR_PORT"
 ANGIE_DETECTED="$ANGIE_DETECTED"
 ANGIE_METRICS_PORT="$ANGIE_METRICS_PORT"
+CROWDSEC_INSTALLED="$CROWDSEC_INSTALLED"
+VICTORIAMETRICS_IP="$VICTORIAMETRICS_IP"
 INSTALL_DATE="$(date -Iseconds)"
 NODE_EXPORTER_VERSION="$NODE_EXPORTER_VER"
 CADVISOR_VERSION="${CADVISOR_VERSION:-v0.49.1}"
@@ -595,6 +720,14 @@ else
     printf "Angie: Не обнаружен или метрики не настроены\n"
 fi
 
+if [ "$CROWDSEC_INSTALLED" = true ]; then
+    printf "CrowdSec: Установлен и настроен\n"
+    printf "  → Отправка метрик: http://%s:8428/api/v1/import/prometheus\n" "$VICTORIAMETRICS_IP"
+    printf "  → Instance: %s\n" "$SERVER_NAME"
+else
+    printf "CrowdSec: Не установлен\n"
+fi
+
 printf "\n📋 ДЛЯ ДОБАВЛЕНИЯ В ЦЕНТРАЛЬНЫЙ МОНИТОРИНГ:\n"
 
 COMMAND_ARGS="\"$SERVER_NAME\" \"$TAILSCALE_IP\""
@@ -608,4 +741,5 @@ if [ "$CADVISOR_INSTALLED" = true ] && [ -n "$CADVISOR_PORT" ]; then
 fi
 
 printf "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s %s\n" "$COMMAND_ARGS"
+
 printf "\n✅ Готово!\n"

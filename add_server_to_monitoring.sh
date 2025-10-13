@@ -2,6 +2,7 @@
 
 # =============================================================================
 # Скрипт для добавления нового сервера в конфигурацию Prometheus с file_sd_configs
+# Версия 2.2.0 - добавлена информация о CrowdSec
 # =============================================================================
 
 set -e
@@ -30,7 +31,7 @@ NODE_FILE="$TARGETS_DIR/node/$SERVER_NAME.yml"
 CADVISOR_FILE="$TARGETS_DIR/cadvisor/$SERVER_NAME.yml"
 ANGIE_FILE="$TARGETS_DIR/angie/$SERVER_NAME.yml"
 
-# Проверяем существование (для force)
+# Проверяем существование
 if [ -f "$NODE_FILE" ] && [ "$FORCE" != true ]; then
     echo "Предупреждение: Сервер $SERVER_NAME уже существует"
     read -p "Обновить? (y/N): " response
@@ -130,6 +131,19 @@ else
     echo "⚠ Targets пока не появились, подождите refresh_interval (1m) или проверьте логи"
 fi
 
+# Проверка CrowdSec
+echo ""
+echo "=== Проверка CrowdSec ==="
+CROWDSEC_METRICS=$(curl -s "http://localhost:8428/api/v1/query" -d "query=cs_lapi_decision{instance=\"$SERVER_NAME\"}" 2>/dev/null | jq -r '.data.result | length')
+
+if [ "$CROWDSEC_METRICS" -gt 0 ] 2>/dev/null; then
+    echo "✓ CrowdSec метрики обнаружены ($CROWDSEC_METRICS записей)"
+    echo "  Дашборд: CrowdSec Cyber Threat Insights"
+else
+    echo "ℹ CrowdSec метрики отсутствуют (появятся после первых alerts)"
+    echo "  Метрики отправляются автоматически через HTTP push"
+fi
+
 # Финальный отчёт
 echo ""
 echo "Добавленные/обновлённые файлы:"
@@ -144,3 +158,4 @@ echo "📊 Рекомендуемые дашборды Grafana:"
 echo "- Node Exporter Full: ID 1860"
 echo "- Docker Container & Host Metrics: ID 10619"
 if [ "$CADVISOR_AVAILABLE" = true ]; then echo "- Docker and system monitoring: ID 893"; fi
+echo "- CrowdSec Cyber Threat Insights (импортирован локально)"

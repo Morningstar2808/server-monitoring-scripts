@@ -1,6 +1,6 @@
 #!/bin/bash
 # Обертка для добавления сервера в мониторинг одной командой
-# Версия 2.0.0 - всегда скачивает актуальную версию
+# Версия 2.2.0 - всегда скачивает актуальную версию
 
 if [ $# -lt 4 ]; then
     echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP ANGIE_PORT CADVISOR_PORT [--force]"
@@ -27,7 +27,7 @@ echo ""
 SCRIPT_NAME="add_server_to_monitoring.sh"
 SCRIPT_URL="https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/$SCRIPT_NAME"
 
-# Всегда скачиваем свежую версию (принудительно перезаписываем)
+# Всегда скачиваем свежую версию
 echo "⬇️  Скачиваем актуальный скрипт..."
 if wget -q -O "$SCRIPT_NAME" "$SCRIPT_URL" 2>/dev/null || curl -fsSL -o "$SCRIPT_NAME" "$SCRIPT_URL" 2>/dev/null; then
     chmod +x "$SCRIPT_NAME"
