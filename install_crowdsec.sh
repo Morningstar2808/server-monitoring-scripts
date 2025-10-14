@@ -19,27 +19,19 @@ printf "=== Установка CrowdSec (v%s) ===\n" "$SCRIPT_VERSION"
 # ============================================================================
 
 SERVER_NAME=""
-if [ -t 0 ]; then
-    while true; do
-        printf "Введите уникальное имя сервера (латиницей, без пробелов): "
-        read -r SERVER_NAME
-        SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')
-        if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] && [ -n "$SERVER_NAME" ]; then 
-            break
-        else
-            printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания. Попробуйте снова.\n"
-        fi
-    done
-else
-    if [ -f /etc/hostname ]; then
-        SERVER_NAME=$(cat /etc/hostname | tr -cd 'a-zA-Z0-9_-' | head -c 15)
+while true; do
+    printf "Введите уникальное имя сервера (латиницей, без пробелов): "
+    read -r SERVER_NAME
+    SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')
+    if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] && [ -n "$SERVER_NAME" ]; then 
+        break
     else
-        SERVER_NAME="server-$(date +%s | tail -c 6)"
+        printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания. Попробуйте снова.\n"
     fi
-    if ! [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] || [ -z "$SERVER_NAME" ]; then
-        SERVER_NAME="server-$(date +%s | tail -c 6)"
-    fi
-    printf "Автоматически определено имя сервера: %s\n" "$SERVER_NAME"
+done
+
+printf "Имя сервера установлено: %s\n" "$SERVER_NAME"
+
 fi
 
 # ============================================================================
