@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # =============================================================================
-# Скрипт быстрой установки Node Exporter с автообнаружением Angie, cAdvisor и CrowdSec
-# Версия 2.2.0 - добавлена установка CrowdSec с отправкой метрик в VictoriaMetrics
+# Скрипт установки Node Exporter с автообнаружением Angie и cAdvisor
 # =============================================================================
 
 set -e
@@ -16,7 +15,7 @@ fi
 # ============================================================================
 # САМООБНОВЛЕНИЕ СКРИПТА
 # ============================================================================
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.3.0"
 SCRIPT_URL="https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/install_monitoring.sh"
 SCRIPT_NAME="$(basename "$0")"
 UPDATE_CHECK_FILE="/tmp/.monitoring_install_update_check"
@@ -98,29 +97,26 @@ if [ -z "$TAILSCALE_IP" ]; then
 fi
 printf "Определен IP: %s\n" "$TAILSCALE_IP"
 
+# ============================================================================
+# ОПРЕДЕЛЕНИЕ ИМЕНИ СЕРВЕРА
+# ============================================================================
+
+# Перенаправляем stdin на терминал для корректной работы read при запуске через pipe
+exec < /dev/tty
+
 SERVER_NAME=""
-if [ -t 0 ]; then
-    while true; do
-        printf "Введите уникальное имя сервера (латиницей, без пробелов): "
-        read -r SERVER_NAME
-        SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')
-        if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] && [ -n "$SERVER_NAME" ]; then 
-            break
-        else
-            printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания (без пробелов). Попробуйте снова.\n"
-        fi
-    done
-else
-    if [ -f /etc/hostname ]; then
-        SERVER_NAME=$(cat /etc/hostname | tr -cd 'a-zA-Z0-9_-' | head -c 15)
+while true; do
+    printf "Введите уникальное имя сервера (латиницей, без пробелов): "
+    read -r SERVER_NAME
+    SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')
+    if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] && [ -n "$SERVER_NAME" ]; then
+        break
     else
-        SERVER_NAME="server-$(date +%s | tail -c 6)"
+        printf "Ошибка: Используйте только буквы, цифры, дефисы и подчеркивания (без пробелов). Попробуйте снова.\n"
     fi
-    if ! [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] || [ -z "$SERVER_NAME" ]; then
-        SERVER_NAME="server-$(date +%s | tail -c 6)"
-    fi
-    printf "Автоматически определено имя сервера: %s\n" "$SERVER_NAME"
-fi
+done
+
+printf "Имя сервера установлено: %s\n" "$SERVER_NAME"
 
 # ============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -244,7 +240,7 @@ for i in {1..3}; do
         printf "Попытка %d/3...\n" "$i"
         sleep 2
     fi
-    if [ $i -eq 3 ]; then 
+    if [ $i -eq 3 ]; then
         printf "✗ Node Exporter недоступен\n"
         exit 1
     fi
@@ -354,7 +350,7 @@ if [ "$CADVISOR_INSTALLED" = true ] && [ -n "$CADVISOR_PORT" ]; then
             printf "Попытка %d/3...\n" "$i"
             sleep 2
         fi
-        if [ $i -eq 3 ]; then 
+        if [ $i -eq 3 ]; then
             printf "❌ cAdvisor метрики недоступны\n"
             CADVISOR_INSTALLED=false
         fi
@@ -536,142 +532,6 @@ else
 fi
 
 # ============================================================================
-# CROWDSEC
-# ============================================================================
-
-CROWDSEC_INSTALLED=false
-VICTORIAMETRICS_IP="100.87.29.86"
-
-printf "\n=== Проверка и установка CrowdSec ===\n"
-
-if command -v cscli > /dev/null 2>&1; then
-    printf "✓ CrowdSec уже установлен\n"
-    CROWDSEC_INSTALLED=true
-else
-    printf "Устанавливаем CrowdSec...\n"
-
-    if curl -s https://packagecloud.io/install/repositories/crowdsec/crowdsec/script.deb.sh | bash; then
-        apt-get update -qq
-        apt-get install -y crowdsec crowdsec-firewall-bouncer-nftables
-
-        printf "✓ CrowdSec установлен\n"
-        CROWDSEC_INSTALLED=true
-    else
-        printf "❌ Ошибка установки CrowdSec\n"
-    fi
-fi
-
-if [ "$CROWDSEC_INSTALLED" = true ]; then
-    printf "Устанавливаем коллекции CrowdSec...\n"
-    cscli hub update > /dev/null 2>&1
-    cscli collections install crowdsecurity/linux > /dev/null 2>&1
-    cscli collections install crowdsecurity/sshd > /dev/null 2>&1
-
-    if [ "$ANGIE_DETECTED" = true ]; then
-        cscli collections install crowdsecurity/nginx > /dev/null 2>&1
-        printf "✓ Установлены коллекции: linux, sshd, nginx\n"
-    else
-        printf "✓ Установлены коллекции: linux, sshd\n"
-    fi
-
-    if [ ! -f /etc/crowdsec/acquis.yaml.backup ]; then
-        cp /etc/crowdsec/acquis.yaml /etc/crowdsec/acquis.yaml.backup 2>/dev/null || true
-    fi
-
-    cat > /etc/crowdsec/acquis.yaml << 'EOF'
-source: file
-filenames:
-  - /var/log/auth.log
-labels:
-  type: syslog
-EOF
-
-    if [ "$ANGIE_DETECTED" = true ]; then
-        cat >> /etc/crowdsec/acquis.yaml << 'EOF'
-
----
-source: file
-filenames:
-  - /var/log/angie/access.log
-  - /var/log/angie/error.log
-labels:
-  type: nginx
-EOF
-        printf "✓ Настроен сбор логов: auth.log, angie\n"
-    else
-        printf "✓ Настроен сбор логов: auth.log\n"
-    fi
-
-    printf "Настраиваем отправку метрик в VictoriaMetrics...\n"
-
-    cat > /etc/crowdsec/notifications/http.yaml << EOF
-type: http
-
-name: victoriametrics_push
-
-log_level: info
-
-format: |
-  {{range .}}cs_lapi_decision{instance="$SERVER_NAME",server_name="$SERVER_NAME",country="{{.Source.Cn}}",asname="{{.Source.AsName}}",asnumber="{{.Source.AsNumber}}",latitude="{{.Source.Latitude}}",longitude="{{.Source.Longitude}}",scenario="{{.Scenario}}",ip="{{.Source.IP}}",scope="{{range .Decisions}}{{.Scope}}{{end}}",value="{{range .Decisions}}{{.Value}}{{end}}"} 1
-  {{end}}
-
-url: http://$VICTORIAMETRICS_IP:8428/api/v1/import/prometheus
-
-method: POST
-
-headers:
-  Content-Type: text/plain
-
-timeout: 10s
-EOF
-
-    if [ ! -f /etc/crowdsec/profiles.yaml.backup ]; then
-        cp /etc/crowdsec/profiles.yaml /etc/crowdsec/profiles.yaml.backup 2>/dev/null || true
-    fi
-
-    cat > /etc/crowdsec/profiles.yaml << 'EOF'
----
-name: send_to_victoriametrics
-filters:
-  - Alert.Remediation == true
-notifications:
-  - victoriametrics_push
-decisions:
-  - type: ban
-    duration: 4h
-on_success: continue
-
----
-name: default_ip_remediation
-filters:
- - Alert.Remediation == true && Alert.GetScope() == "Ip"
-decisions:
- - type: ban
-   duration: 4h
-on_success: break
-EOF
-
-    printf "✓ Конфигурация CrowdSec завершена\n"
-
-    printf "Перезапускаем CrowdSec...\n"
-    systemctl restart crowdsec
-    sleep 3
-
-    if systemctl is-active --quiet crowdsec; then
-        printf "✓ CrowdSec успешно запущен\n"
-
-        if ps aux | grep -q "[n]otification-http"; then
-            printf "✓ HTTP notification плагин загружен\n"
-        else
-            printf "⚠ HTTP notification плагин загрузится при первом alert\n"
-        fi
-    else
-        printf "❌ Ошибка запуска CrowdSec\n"
-        systemctl status crowdsec --no-pager | head -20
-    fi
-fi
-
-# ============================================================================
 # СОХРАНЕНИЕ КОНФИГУРАЦИИ
 # ============================================================================
 
@@ -684,8 +544,6 @@ CADVISOR_INSTALLED="$CADVISOR_INSTALLED"
 CADVISOR_PORT="$CADVISOR_PORT"
 ANGIE_DETECTED="$ANGIE_DETECTED"
 ANGIE_METRICS_PORT="$ANGIE_METRICS_PORT"
-CROWDSEC_INSTALLED="$CROWDSEC_INSTALLED"
-VICTORIAMETRICS_IP="$VICTORIAMETRICS_IP"
 INSTALL_DATE="$(date -Iseconds)"
 NODE_EXPORTER_VERSION="$NODE_EXPORTER_VER"
 CADVISOR_VERSION="${CADVISOR_VERSION:-v0.49.1}"
@@ -720,26 +578,18 @@ else
     printf "Angie: Не обнаружен или метрики не настроены\n"
 fi
 
-if [ "$CROWDSEC_INSTALLED" = true ]; then
-    printf "CrowdSec: Установлен и настроен\n"
-    printf "  → Отправка метрик: http://%s:8428/api/v1/import/prometheus\n" "$VICTORIAMETRICS_IP"
-    printf "  → Instance: %s\n" "$SERVER_NAME"
-else
-    printf "CrowdSec: Не установлен\n"
-fi
-
 printf "\n📋 ДЛЯ ДОБАВЛЕНИЯ В ЦЕНТРАЛЬНЫЙ МОНИТОРИНГ:\n"
 
 COMMAND_ARGS="\"$SERVER_NAME\" \"$TAILSCALE_IP\""
-if [ -n "$ANGIE_METRICS_PORT" ]; then 
+if [ -n "$ANGIE_METRICS_PORT" ]; then
     COMMAND_ARGS="$COMMAND_ARGS \"$ANGIE_METRICS_PORT\""
 else
     COMMAND_ARGS="$COMMAND_ARGS \"\""
 fi
-if [ "$CADVISOR_INSTALLED" = true ] && [ -n "$CADVISOR_PORT" ]; then 
+if [ "$CADVISOR_INSTALLED" = true ] && [ -n "$CADVISOR_PORT" ]; then
     COMMAND_ARGS="$COMMAND_ARGS \"$CADVISOR_PORT\""
 fi
 
-printf "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s %s\n" "$COMMAND_ARGS"
+printf "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add_server.sh | bash -s %s\n" "$COMMAND_ARGS"
 
 printf "\n✅ Готово!\n"

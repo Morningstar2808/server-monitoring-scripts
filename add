@@ -1,6 +1,5 @@
 #!/bin/bash
 # Обертка для добавления сервера в мониторинг одной командой
-# Версия 2.2.0 - всегда скачивает актуальную версию
 
 if [ $# -lt 4 ]; then
     echo "Использование: curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add | bash -s SERVER_NAME TAILSCALE_IP ANGIE_PORT CADVISOR_PORT [--force]"
