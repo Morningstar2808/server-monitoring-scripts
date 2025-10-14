@@ -217,6 +217,29 @@ EOF
 printf "✓ Конфигурация profiles завершена\n"
 
 # ============================================================================
+# ИСПРАВЛЕНИЕ ИМЕН ПЛАГИНОВ (BUG В DEBIAN ПАКЕТЕ)
+# ============================================================================
+
+printf "\nИсправляем имена плагинов...\n"
+
+PLUGINS_DIR="/usr/lib/crowdsec/plugins"
+
+# Переименовываем плагины с неправильными именами
+for plugin in dummy email http slack splunk; do
+    if [ -f "$PLUGINS_DIR/$plugin" ]; then
+        printf "  Переименовываем %s -> notification-%s\n" "$plugin" "$plugin"
+        mv "$PLUGINS_DIR/$plugin" "$PLUGINS_DIR/notification-$plugin"
+    fi
+done
+
+# Проверяем что плагины переименованы
+if ls "$PLUGINS_DIR"/notification-* > /dev/null 2>&1; then
+    printf "✓ Плагины исправлены\n"
+else
+    printf "⚠ Плагины не найдены в $PLUGINS_DIR\n"
+fi
+
+# ============================================================================
 # ПЕРЕЗАПУСК CROWDSEC
 # ============================================================================
 
