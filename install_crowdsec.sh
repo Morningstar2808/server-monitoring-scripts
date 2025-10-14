@@ -21,7 +21,7 @@ printf "=== Установка CrowdSec (v%s) ===\n" "$SCRIPT_VERSION"
 SERVER_NAME=""
 while true; do
     printf "Введите уникальное имя сервера (латиницей, без пробелов): "
-    read -r SERVER_NAME
+    read -r SERVER_NAME < /dev/tty
     SERVER_NAME=$(echo "$SERVER_NAME" | tr -d ' ')
     if [[ $SERVER_NAME =~ ^[a-zA-Z0-9_-]+$ ]] && [ -n "$SERVER_NAME" ]; then 
         break
@@ -31,8 +31,6 @@ while true; do
 done
 
 printf "Имя сервера установлено: %s\n" "$SERVER_NAME"
-
-fi
 
 # ============================================================================
 # ПРОВЕРКА ANGIE
