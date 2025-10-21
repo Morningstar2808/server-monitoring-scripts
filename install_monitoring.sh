@@ -590,6 +590,6 @@ if [ "$CADVISOR_INSTALLED" = true ] && [ -n "$CADVISOR_PORT" ]; then
     COMMAND_ARGS="$COMMAND_ARGS \"$CADVISOR_PORT\""
 fi
 
-printf "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add_server.sh | bash -s %s\n" "$COMMAND_ARGS"
+printf "curl -fsSL https://raw.githubusercontent.com/Morningstar2808/server-monitoring-scripts/master/add_server_to_monitoring.sh | bash -s %s\n" "$COMMAND_ARGS"
 
 printf "\n✅ Готово!\n"
